@@ -1,0 +1,12 @@
+node_modules
+npm-debug.log
+.env
+.env.*
+!.env.example
+.git
+.gitignore
+*.md
+firebase.json
+wikipedia_qa_dataset.json
+wikipedia_qa_sample.json
+download_wikipedia_qa.py
