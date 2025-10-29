@@ -351,13 +351,11 @@ Invoke-RestMethod -Method POST -Uri "http://localhost:3000/api/chat" -ContentTyp
 
 **Terminal 1 - Start Firestore Emulator:**
 ```bash
-cd chatbot-backend
 firebase emulators:start --only firestore
 ```
 
 **Terminal 2 - Start API Server:**
 ```bash
-cd chatbot-backend
 node server.js
 ```
 
