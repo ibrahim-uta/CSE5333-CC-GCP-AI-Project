@@ -1,78 +1,75 @@
+// frontend/chat.js
+
 import {initializeFirebase} from './firebase-init.js';
 import {onAuthStateChanged, signOut} from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-auth.js';
 
 let auth = null;
 
-// State Management
 const state = {
     user: null,
     sessionId: null,
-    messages: []
+    messages: [],
+    currentChatId: null,
+    chats: []
 };
 
 const API_URL = window.location.origin;
 
-// Autocomplete variables
 let searchTimeout = null;
 let selectedSuggestion = -1;
 let currentSuggestions = [];
 
-// Initialize Firebase and check authentication
+// -------------------- Bootstrap --------------------
+
 (async() => {
     try {
         const {auth: firebaseAuth} = await initializeFirebase();
         auth = firebaseAuth;
 
-        // Check Authentication
-        onAuthStateChanged(auth, (user) => {
-            if (user) {
-                // User is authenticated
-                state.user = user;
-                state.sessionId = user.uid;
-
-                // Enable input
-                const userInput = document.getElementById('userInput');
-                const askBtn = document.getElementById('askBtn');
-                if (userInput) {
-                    userInput.disabled = false;
-                }
-                if (askBtn) {
-                    askBtn.disabled = false;
-                }
-
-                // 🔧 Setup event listeners AFTER user is authenticated
-                setupEventListeners();
-
-                // Load sample questions
-                loadSampleQuestions();
-            } else {
-                // Not authenticated
+        onAuthStateChanged(auth, async user => {
+            if (!user) {
                 window
                     .location
                     .replace('login.html');
+                return;
             }
+
+            state.user = user;
+            state.sessionId = user.uid;
+
+            const userInput = document.getElementById('userInput');
+            const askBtn = document.getElementById('askBtn');
+            if (userInput) 
+                userInput.disabled = false;
+            if (askBtn) 
+                askBtn.disabled = false;
+            
+            setupEventListeners();
+
+            await loadChats();
+            await ensureCurrentChat();
+            await loadSampleQuestions();
         });
     } catch (error) {
-        console.error('Chat initialization error:', error);
+        console.error('Chat initialization error', error);
         window
             .location
             .replace('login.html');
     }
 })();
 
-// 🆕 Setup all event listeners (called after auth)
+// -------------------- Event wiring --------------------
+
 function setupEventListeners() {
-    // Search as user types (autocomplete)
     const userInput = document.getElementById('userInput');
     if (userInput) {
-        userInput.addEventListener('input', async(e) => {
+        userInput.addEventListener('input', async e => {
             const query = e
                 .target
                 .value
                 .trim();
 
             clearTimeout(searchTimeout);
-
             if (query.length < 2) {
                 hideSuggestions();
                 return;
@@ -83,10 +80,8 @@ function setupEventListeners() {
             }, 300);
         });
 
-        // Keyboard navigation
-        userInput.addEventListener('keydown', (e) => {
+        userInput.addEventListener('keydown', e => {
             const dropdown = document.getElementById('suggestions');
-
             if (!dropdown || dropdown.classList.contains('hidden')) 
                 return;
             
@@ -98,23 +93,23 @@ function setupEventListeners() {
                 e.preventDefault();
                 selectedSuggestion = Math.max(selectedSuggestion - 1, -1);
                 highlightSuggestion();
-            } else if (e.key === 'Enter' && selectedSuggestion >= 0) {
-                e.preventDefault();
-                selectSuggestion(selectedSuggestion);
+            } else if (e.key === 'Enter') {
+                if (selectedSuggestion >= 0) {
+                    e.preventDefault();
+                    selectSuggestion(selectedSuggestion);
+                }
             } else if (e.key === 'Escape') {
                 hideSuggestions();
             }
         });
     }
 
-    // Hide suggestions when clicking outside
-    document.addEventListener('click', (e) => {
+    document.addEventListener('click', e => {
         if (!e.target.closest('.search-container')) {
             hideSuggestions();
         }
     });
 
-    // Logout Handler
     const logoutBtn = document.getElementById('logoutBtn');
     if (logoutBtn) {
         logoutBtn.addEventListener('click', async() => {
@@ -124,37 +119,171 @@ function setupEventListeners() {
                     .location
                     .replace('login.html');
             } catch (error) {
-                console.error('Logout error:', error);
+                console.error('Logout error', error);
                 alert('Failed to logout. Please try again.');
             }
         });
     }
 
-    // Chat Form Handler
     const chatForm = document.getElementById('chatForm');
     if (chatForm) {
-        chatForm.addEventListener('submit', async(e) => {
+        chatForm.addEventListener('submit', async e => {
             e.preventDefault();
-
             const userInput = document.getElementById('userInput');
             const message = userInput
                 .value
                 .trim();
-
             if (!message) 
                 return;
             
-            // Clear input and hide suggestions
             userInput.value = '';
             hideSuggestions();
-
-            // Send message
             await sendMessage(message);
+        });
+    }
+
+    const newChatBtn = document.getElementById('newChatBtn');
+    if (newChatBtn) {
+        newChatBtn.addEventListener('click', async() => {
+            await createNewChat();
         });
     }
 }
 
-// Load sample questions from API
+// -------------------- Chat history helpers --------------------
+
+async function ensureCurrentChat() {
+    if (state.chats.length === 0) {
+        await createNewChat();
+    } else if (!state.currentChatId) {
+        const first = state.chats[0];
+        state.currentChatId = first.id;
+        await loadChatMessages(first.id);
+    }
+}
+
+async function loadChats() {
+    if (!state.user) 
+        return;
+    
+    try {
+        const res = await fetch(`${API_URL}/api/chats?userId=${encodeURIComponent(state.user.uid)}`);
+        const data = await res.json();
+        state.chats = data.chats || [];
+        renderChatList();
+    } catch (err) {
+        console.error('Failed to load chats', err);
+    }
+}
+
+async function createNewChat() {
+    if (!state.user) 
+        return;
+    
+    try {
+        const res = await fetch(`${API_URL}/api/chats`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({userId: state.user.uid, title: 'New chat'})
+        });
+
+        const data = await res.json();
+        state.currentChatId = data.chatId;
+        await loadChats();
+        state.messages = [];
+        renderMessages([]);
+    } catch (err) {
+        console.error('Create chat failed', err);
+    }
+}
+
+async function selectChat(chatId) {
+    state.currentChatId = chatId;
+    await loadChatMessages(chatId);
+    renderChatList();
+}
+
+async function deleteChat(chatId, ev) {
+    ev.stopPropagation();
+    if (!state.user) 
+        return;
+    if (!confirm('Delete this chat?')) 
+        return;
+    
+    try {
+        await fetch(`${API_URL}/api/chats/${encodeURIComponent(chatId)}?userId=${encodeURIComponent(state.user.uid)}`, {method: 'DELETE'});
+
+        if (state.currentChatId === chatId) 
+            state.currentChatId = null;
+        await loadChats();
+        await ensureCurrentChat();
+    } catch (err) {
+        console.error('Delete chat failed', err);
+    }
+}
+
+async function loadChatMessages(chatId) {
+    if (!state.user) 
+        return;
+    
+    try {
+        const res = await fetch(`${API_URL}/api/chats/${encodeURIComponent(chatId)}/messages?userId=${encodeURIComponent(state.user.uid)}`);
+        const data = await res.json();
+
+        const msgs = (data.messages || []).map(m => ({
+            text: m.text,
+            sender: m.role === 'user'
+                ? 'user'
+                : 'bot',
+            metadata: m.method
+                ? {
+                    method: m.method,
+                    confidence: m.confidence || 0
+                }
+                : null
+        }));
+
+        state.messages = msgs;
+        renderMessages(msgs);
+    } catch (err) {
+        console.error('Load messages failed', err);
+    }
+}
+
+function renderChatList() {
+    const list = document.getElementById('chatList');
+    if (!list) 
+        return;
+    
+    list.innerHTML = '';
+
+    state
+        .chats
+        .forEach(chat => {
+            const li = document.createElement('li');
+            li.className = 'chat-list-item';
+            if (chat.id === state.currentChatId) 
+                li.classList.add('active');
+            li.onclick = () => selectChat(chat.id);
+
+            const title = document.createElement('span');
+            title.className = 'chat-list-title';
+            title.textContent = chat.title || 'Chat';
+
+            const del = document.createElement('button');
+            del.className = 'chat-delete-btn';
+            del.textContent = '✕';
+            del.onclick = ev => deleteChat(chat.id, ev);
+
+            li.appendChild(title);
+            li.appendChild(del);
+            list.appendChild(li);
+        });
+}
+
+// -------------------- Sample questions -------------------- Sample questions
 async function loadSampleQuestions() {
     try {
         const container = document.getElementById('sampleQuestions');
@@ -164,229 +293,311 @@ async function loadSampleQuestions() {
         container
             .classList
             .add('refreshing');
-
         const response = await fetch(`${API_URL}/api/sample-questions?count=6`);
         const data = await response.json();
 
         container.innerHTML = '';
-        data
-            .questions
-            .forEach(questionText => {
-                const button = document.createElement('button');
-                button.className = 'sample-question-btn';
-                button.textContent = questionText;
-
-                // Auto-submit when clicked
-                button.onclick = () => {
-                    sendMessage(questionText);
-                };
-
-                container.appendChild(button);
-            });
+        (data.questions || []).forEach(item => {
+            // item = { question, answer }
+            const button = document.createElement('button');
+            button.className = 'sample-question-btn';
+            button.textContent = item.question;
+            button.onclick = () => sendGroundTruth(item);
+            container.appendChild(button);
+        });
 
         container
             .classList
             .remove('refreshing');
     } catch (error) {
-        console.error('Failed to load sample questions:', error);
-        const container = document.getElementById('sampleQuestions');
-        if (container) {
-            container.innerHTML = '<div class="loading-samples">Could not load suggestions</div>';
-        }
+        console.error('Failed to load sample questions', error);
     }
 }
 
-// Search for matching questions
+// -------------------- Search suggestions -------------------- Autocomplete
+// search over 443k questions
 async function searchQuestions(query) {
+    const methodSelector = document.getElementById('searchMethodSelector');
+    const preferredMethod = methodSelector
+        ? methodSelector.value
+        : 'hybrid';
+
     try {
-        const method = document
-            .getElementById('searchMethodSelector')
-            .value;
-        const response = await fetch(`${API_URL}/api/search-questions?q=${encodeURIComponent(query)}&limit=5&method=${method}`);
-        const data = await response.json();
+        const res = await fetch(`${API_URL}/api/search-questions?q=${encodeURIComponent(query)}&limit=6&method=${encodeURIComponent(preferredMethod)}`);
+        const data = await res.json();
 
         currentSuggestions = data.suggestions || [];
-        showSuggestions(currentSuggestions, data.method);
-
-    } catch (error) {
-        console.error('Search error:', error);
+        selectedSuggestion = -1;
+        showSuggestions(currentSuggestions, data.method || preferredMethod);
+    } catch (err) {
+        console.error('Search failed', err);
+        hideSuggestions();
     }
 }
 
-// Show suggestions dropdown
-function showSuggestions(suggestions, method) {
+function showSuggestions(items, methodLabel) {
     const dropdown = document.getElementById('suggestions');
     if (!dropdown) 
         return;
     
-    if (suggestions.length === 0) {
-        dropdown.innerHTML = '<div class="no-results">No matching questions found</div>';
+    if (!items || items.length === 0) {
         dropdown
             .classList
-            .remove('hidden');
+            .add('hidden');
+        dropdown.innerHTML = '';
         return;
     }
 
     dropdown.innerHTML = '';
-    selectedSuggestion = -1;
-
-    // Method badge
-    const badge = document.createElement('div');
-    badge.className = 'search-method-badge';
-    badge.textContent = `Using ${method} search`;
-    dropdown.appendChild(badge);
-
-    suggestions.forEach((item, index) => {
+    items.forEach((item, index) => {
         const div = document.createElement('div');
         div.className = 'suggestion-item';
+        div.dataset.index = index.toString();
 
         const confidence = Math.round((item.score || 0) * 100);
-        const emoji = confidence >= 80 ? '🟢' : confidence >= 50 ? '🟡' : '🟠';
+        const emoji = confidence >= 80
+            ? '🟢'
+            : confidence >= 50
+                ? '🟡'
+                : '🟠';
 
         div.innerHTML = `
-        <div class="suggestion-question">
-            ${emoji} ${item.question}
-            <span class="confidence-score">${confidence}%</span>
-        </div>
-        `;
+      <div class="suggestion-question">
+        ${emoji} ${item.question}
+        <span class="confidence-score">${confidence}%</span>
+        <span class="method-badge">${methodLabel}</span>
+      </div>
+    `;
 
+        div.onclick = () => {
+            selectSuggestion(index);
+        };
 
-        div.onclick = () => selectSuggestion(index);
         dropdown.appendChild(div);
     });
 
     dropdown
         .classList
         .remove('hidden');
+    highlightSuggestion();
 }
 
-// Hide suggestions
+function selectSuggestion(index) {
+    const item = currentSuggestions[index];
+    if (!item) 
+        return;
+    
+    const userInput = document.getElementById('userInput');
+    if (userInput) {
+        userInput.value = ''; // clear box after selection
+    }
+
+    hideSuggestions();
+
+    // Use the known QA pair as ground truth
+    sendGroundTruth(item);
+}
+
 function hideSuggestions() {
     const dropdown = document.getElementById('suggestions');
-    if (dropdown) {
-        dropdown
-            .classList
-            .add('hidden');
-    }
+    if (dropdown) 
+        dropdown.classList.add('hidden');
     selectedSuggestion = -1;
+    currentSuggestions = [];
 }
 
-// Select suggestion
-function selectSuggestion(index) {
-    if (index >= 0 && index < currentSuggestions.length) {
-        const selected = currentSuggestions[index];
-        const userInput = document.getElementById('userInput');
-        if (userInput) {
-            userInput.value = selected.question;
-            hideSuggestions();
-            userInput.focus();
-        }
-    }
-}
-
-// Highlight selected
 function highlightSuggestion() {
-    const items = document.querySelectorAll('.suggestion-item');
+    const dropdown = document.getElementById('suggestions');
+    if (!dropdown) 
+        return;
+    
+    const items = dropdown.querySelectorAll('.suggestion-item');
     items.forEach((item, idx) => {
-        if (idx === selectedSuggestion) {
-            item
-                .classList
-                .add('selected');
-        } else {
+        if (idx === selectedSuggestion) 
+            item.classList.add('selected');
+        else 
             item
                 .classList
                 .remove('selected');
         }
-    });
+    );
 }
 
-// Unified send message function
+
+// -------------------- Messaging --------------------
+
 async function sendMessage(message) {
-    if (!message || !state.user) 
+    if (!state.user) 
         return;
     
-    // Add user message
-    addMessage(message, 'user');
+    if (!state.currentChatId) {
+        await ensureCurrentChat();
+    }
 
-    // Get answer
+    const methodSelector = document.getElementById('searchMethodSelector');
+    const preferredMethod = methodSelector
+        ? methodSelector.value
+        : 'hybrid';
+
+    // optimistic user bubble
+    const userMsg = {
+        text: message,
+        sender: 'user',
+        metadata: null
+    };
+    state
+        .messages
+        .push(userMsg);
+    renderMessages(state.messages);
+
     try {
-        const method = document
-            .getElementById('searchMethodSelector')
-            .value;
-        const response = await fetch(`${API_URL}/api/chat`, {
+        const res = await fetch(`${API_URL}/api/chat`, {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json'
             },
-            body: JSON.stringify({message: message, preferredMethod: method, sessionId: state.sessionId, userId: state.user.uid})
+            body: JSON.stringify({message, sessionId: state.sessionId, userId: state.user.uid, preferredMethod, chatId: state.currentChatId})
         });
 
-        if (!response.ok) {
-            throw new Error(`Server error: ${response.status}`);
+        const data = await res.json();
+        if (!res.ok) {
+            console.error('Chat API error', data);
+            return;
         }
 
-        const data = await response.json();
-
-        // ✅ Pass confidence and method separately
-        addMessage(data.reply, 'bot', {
-            confidence: data.confidence,
-            method: data.method
-        });
-
-        // Save to state
+        const botMsg = {
+            text: data.reply,
+            sender: 'bot',
+            metadata: data.method
+                ? {
+                    method: data.method,
+                    confidence: data.confidence || 0
+                }
+                : null
+        };
         state
             .messages
-            .push({user: message, bot: data.reply, method: data.method, confidence: data.confidence, timestamp: new Date()});
+            .push(botMsg);
+        renderMessages(state.messages);
 
-        // Refresh suggested questions
+        // Refresh chat list so updatedAt ordering is correct
+        await loadChats();
+
+        // NEW: refresh the suggested questions so the one you used is replaced
         await loadSampleQuestions();
-
-    } catch (error) {
-        console.error('Chat error:', error);
-        addMessage('Sorry, an error occurred. Please try again.', 'bot');
+    } catch (err) {
+        console.error('Send message failed', err);
     }
 }
 
-function addMessage(text, sender, metadata = null) {
-    const messagesContainer = document.getElementById('chatMessages');
-    if (!messagesContainer) 
+async function sendGroundTruth(item) {
+    if (!state.user) 
         return;
     
-    // Compact welcome message after first chat
-    const welcome = messagesContainer.querySelector('.welcome-message');
-    if (welcome && sender === 'user' && state.messages.length === 0) {
-        welcome
-            .classList
-            .add('compact');
+    if (!state.currentChatId) {
+        await ensureCurrentChat();
     }
 
-    const messageDiv = document.createElement('div');
-    messageDiv.className = `message ${sender}`;
+    const methodSelector = document.getElementById('searchMethodSelector');
+    const preferredMethod = methodSelector
+        ? methodSelector.value
+        : 'hybrid';
 
-    const contentDiv = document.createElement('div');
-    contentDiv.className = 'message-content';
-    contentDiv.textContent = text;
+    const question = item.question;
+    const answer = item.answer;
+    const confidence = item.score || 1.0;
+    const method = item.method || preferredMethod || 'ground-truth';
 
-    messageDiv.appendChild(contentDiv);
+    // Optimistic UI: show user question immediately
+    state
+        .messages
+        .push({text: question, sender: 'user', metadata: null});
+    renderMessages(state.messages);
 
-    // ✅ Add confidence badge below bot messages
-    if (sender === 'bot' && metadata && metadata.method) {
-        const confidenceDiv = document.createElement('div');
-        confidenceDiv.className = 'message-metadata';
+    try {
+        const res = await fetch(`${API_URL}/api/chat`, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+                message: question,
+                sessionId: state.sessionId,
+                userId: state.user.uid,
+                preferredMethod,
+                chatId: state.currentChatId,
 
-        const confidence = Math.round((metadata.confidence || 0) * 100);
-        const methodEmoji = {
-            'dialogflow': '☁️',
-            'semantic': '🧠',
-            'fuzzy': '🔤',
-            'keyword': '⚡',
-            'hybrid': '🎯'
-        }[metadata.method] || '📊';
+                // NEW: ground-truth fields
+                groundTruthQuestion: question,
+                groundTruthAnswer: answer,
+                groundTruthMethod: method,
+                groundTruthConfidence: confidence
+            })
+        });
 
-        confidenceDiv.textContent = `${methodEmoji} ${metadata.method} • ${confidence}% confidence`;
-        messageDiv.appendChild(confidenceDiv);
+        const data = await res.json();
+
+        const botMsg = {
+            text: data.reply,
+            sender: 'bot',
+            metadata: data.method
+                ? {
+                    method: data.method,
+                    confidence: data.confidence || 0
+                }
+                : null
+        };
+        state
+            .messages
+            .push(botMsg);
+        renderMessages(state.messages);
+
+        // Keep chat list in sync
+        await loadChats();
+        // NEW: refresh suggested questions so you get a fresh set
+        await loadSampleQuestions();
+    } catch (err) {
+        console.error('Send ground truth failed', err);
+    }
+}
+
+function renderMessages(msgs) {
+    const container = document.getElementById('messages');
+    if (!container) 
+        return;
+    
+    container.innerHTML = '';
+    msgs.forEach(m => {
+        addMessage(m.text, m.sender, m.metadata || null);
+    });
+
+    container.scrollTop = container.scrollHeight;
+}
+
+function addMessage(text, sender, metadata) {
+    const container = document.getElementById('messages');
+    if (!container) 
+        return;
+    
+    const wrapper = document.createElement('div');
+    wrapper.className = `message ${sender}`;
+
+    const content = document.createElement('div');
+    content.className = 'message-content';
+    content.textContent = text;
+    wrapper.appendChild(content);
+
+    if (metadata && metadata.method) {
+        const meta = document.createElement('div');
+        meta.className = 'message-metadata';
+
+        const conf = typeof metadata.confidence === 'number'
+            ? ` (confidence ${ (metadata.confidence * 100).toFixed(1)}%)`
+            : '';
+
+        meta.textContent = `Answer source: ${metadata.method}${conf}`;
+        wrapper.appendChild(meta);
     }
 
-    messagesContainer.appendChild(messageDiv);
-    messagesContainer.scrollTop = messagesContainer.scrollHeight;
+    container.appendChild(wrapper);
 }

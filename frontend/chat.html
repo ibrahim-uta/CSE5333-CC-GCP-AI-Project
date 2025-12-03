@@ -1,69 +1,81 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>QA Chatbot</title>
-    <link rel="stylesheet" href="styles.css">
-</head>
-<body>
-    <div class="container">
-        <!-- Header -->
-        <div class="header">
-            <div>
-                <h1>🤖 Wikipedia QA Chatbot</h1>
-                <p class="subtitle">Ask from 443k+ questions</p>
-            </div>
-            <button id="logoutBtn" class="btn-secondary">Logout</button>
-        </div>
-
-        <!-- Chat Container -->
-        <div class="chat-container">
-            <div id="chatMessages" class="chat-messages">
-                <!-- Welcome Message with Suggested Questions -->
-                <div class="welcome-message">
-                    <h2>👋 Welcome!</h2>
-                    <p>Select a question below or type your own</p>
-                    <div class="suggested-questions">
-                        <h3>💡 Suggested Questions</h3>
-                        <div id="sampleQuestions" class="sample-questions-grid">
-                            <div class="loading-samples">Loading suggestions...</div>
-                        </div>
+<meta charset="UTF-8">
+    <title>Wikipedia QA Chatbot</title>
+    <link rel="stylesheet" href="styles.css"></head>
+    <body>
+        <div class="app-container">
+            <header class="app-header">
+                <div class="logo-title">
+                    <span class="logo-emoji">🤖</span>
+                    <div>
+                        <h1>Wikipedia QA Chatbot</h1>
+                        <p class="subtitle">Ask from 443k+ questions</p>
                     </div>
                 </div>
+                <button id="logoutBtn" class="logout-btn">Logout</button>
+            </header>
+
+            <div class="app-main">
+                <!-- Sidebar: chat history -->
+                <aside class="chat-sidebar">
+                    <div class="sidebar-header">
+                        <span>Chat history</span>
+                        <button id="newChatBtn" class="new-chat-btn">+ New</button>
+                    </div>
+                    <ul id="chatList" class="chat-list"></ul>
+                </aside>
+
+                <!-- Right side: welcome + messages + input -->
+                <section class="chat-section">
+                    <div class="chat-container">
+                        <div class="welcome-message" id="welcomeMessage">
+                            <h2>Welcome!</h2>
+                            <p>Select a question below or type your own</p>
+
+                            <div class="suggested-questions">
+                                <h3>Suggested questions</h3>
+                                <div id="sampleQuestions" class="sample-questions-grid">
+                                    <!-- Filled by chat.js -->
+                                </div>
+                            </div>
+                        </div>
+
+                        <div id="messages" class="chat-messages">
+                            <!-- Messages rendered by chat.js -->
+                        </div>
+                    </div>
+
+                    <!-- Input + suggestions + method selector -->
+                    <form id="chatForm" class="chat-form">
+                        <div class="search-container">
+                            <input
+                                id="userInput"
+                                type="text"
+                                placeholder="Search or type a question..."
+                                autocomplete="off"
+                                disabled/>
+                            <div id="suggestions" class="suggestions-dropdown hidden">
+                                <!-- Filled by chat.js -->
+                            </div>
+                        </div>
+
+                        <div class="chat-controls">
+                            <select id="searchMethodSelector" class="search-method-selector">
+                                <option value="hybrid">Hybrid (best)</option>
+                                <option value="semantic">Semantic only</option>
+                                <option value="dialogflow">Dialogflow only</option>
+                                <option value="fuzzy">Fuzzy text</option>
+                                <option value="keyword">Keyword only</option>
+                            </select>
+                            <button id="askBtn" type="submit" class="btn-primary" disabled>Ask</button>
+                        </div>
+                    </form>
+                </section>
             </div>
         </div>
 
-        <!-- Chat Input Form -->
-        <form id="chatForm" class="chat-input-form">
-            <div class="search-container">
-                <!-- Search Method Selector -->
-                <select id="searchMethodSelector" class="search-method-selector">
-                    <option value="hybrid">🎯 Smart Match</option>
-                    <option value="semantic">🧠 Semantic (AI)</option>
-                    <option value="dialogflow">☁️ Dialogflow</option>
-                    <option value="fuzzy">🔤 Fuzzy Search</option>
-                    <option value="keyword">⚡ Keyword</option>
-                </select>
-
-
-                <input
-                    type="text"
-                    id="userInput"
-                    placeholder="Type to search questions..."
-                    autocomplete="off"
-                    disabled
-                    required>
-
-                <!-- Suggestions Dropdown -->
-                <div id="suggestions" class="suggestions-dropdown hidden"></div>
-            </div>
-
-            <button type="submit" class="btn-primary" id="askBtn" disabled>Ask</button>
-        </form>
-    </div>
-
-    <script type="module" src="firebase-init.js"></script>
-    <script type="module" src="chat.js"></script>
-</body>
+        <script type="module" src="chat.js"></script>
+    </body>
 </html>

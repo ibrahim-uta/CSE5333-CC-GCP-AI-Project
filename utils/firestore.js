@@ -1,3 +1,5 @@
+// firestore.js
+
 const {Firestore} = require("@google-cloud/firestore");
 const config = require("./config");
 
@@ -11,45 +13,26 @@ function initializeFirestore() {
         firestore = new Firestore({projectId: config.projectId, host: config.firestoreEmulatorHost, ssl: false});
     } else {
         console.log("☁️ Connecting to Cloud Firestore");
-
-        // IMPORTANT: Unset emulator host for cloud mode
         delete process.env.FIRESTORE_EMULATOR_HOST;
-
         firestore = new Firestore({projectId: config.projectId, databaseId: config.firestoreDatabaseId});
     }
-
     return firestore;
 }
 
 async function loadQACache() {
+    console.log("⚠️ Skipping Firestore bulk load (using FAISS + qa_data.json for search).");
+    qaCache = []; // No cache needed for search
+    isLoaded = true; // Mark as 'loaded' so health/search do not block
+    return 0;
+}
+
+// Keep intent lookup and addQAPair as-is
+async function findAnswerByIntent(intentName) {
     try {
-        console.log("Loading Q&A pairs from Firestore...");
         if (!firestore) {
             initializeFirestore();
         }
 
-        const snapshot = await firestore
-            .collection(config.qaCollection)
-            .get();
-        qaCache = [];
-        snapshot.forEach((doc) => {
-            qaCache.push({
-                id: doc.id,
-                ...doc.data()
-            });
-        });
-
-        console.log(`✅ Loaded ${qaCache.length} Q&A pairs into cache`);
-        isLoaded = true;
-        return qaCache.length;
-    } catch (error) {
-        console.error("Error loading Q&A cache:", error);
-        throw error;
-    }
-}
-
-async function findAnswerByIntent(intentName) {
-    try {
         const snapshot = await firestore
             .collection(config.qaCollection)
             .where("intent", "==", intentName)
@@ -84,6 +67,10 @@ async function findAnswerByIntent(intentName) {
 
 async function addQAPair(intent, question, answer) {
     try {
+        if (!firestore) {
+            initializeFirestore();
+        }
+
         const docRef = await firestore
             .collection(config.qaCollection)
             .add({
@@ -93,7 +80,7 @@ async function addQAPair(intent, question, answer) {
                 createdAt: new Date().toISOString()
             });
 
-        await loadQACache();
+        // No need to reload whole cache
         return {success: true, id: docRef.id};
     } catch (error) {
         console.error("Error adding Q&A pair:", error);
@@ -102,7 +89,7 @@ async function addQAPair(intent, question, answer) {
 }
 
 function getCacheStats() {
-    return {isLoaded: isLoaded, totalQuestions: qaCache.length, cache: qaCache};
+    return {isLoaded: isLoaded, totalQuestions: qaCache.length, cache: qaCache, error: null};
 }
 
 function getFirestore() {

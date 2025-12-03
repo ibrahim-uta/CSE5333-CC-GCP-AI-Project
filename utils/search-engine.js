@@ -10,7 +10,8 @@ class SearchEngine {
     // Initialize with Q&A data
     initialize(qaCache) {
         console.log('🔍 Building search index...');
-        this.qaCache = qaCache;
+        this.qaCache = qaCache || [];
+        this.questionIndex = new Map(); // Reset index when re-initializing
         this.buildWordIndex();
         this.ready = true;
         console.log(`✅ Search index ready: ${this.questionIndex.size} unique terms`);
@@ -77,7 +78,7 @@ class SearchEngine {
         }
 
         const elapsed = Date.now() - startTime;
-        console.log(`  ⚡ Search completed in ${elapsed}ms`);
+        console.log(` ⚡ Search completed in ${elapsed}ms`);
 
         return results;
     }
@@ -153,19 +154,19 @@ class SearchEngine {
             const qa = this.qaCache[i];
 
             // 🔧 Safety check
-            if (!qa || !qa.question || !qa.answer)
+            if (!qa || !qa.question || !qa.answer) 
                 continue;
-
+            
             const score = this.calculateScore(queryLower, qa.question.toLowerCase());
 
             if (score > 0.25) {
                 scored.push({question: qa.question, answer: qa.answer, score: score});
             }
 
-            if (scored.length >= limit * 20)
+            if (scored.length >= limit * 20) 
                 break;
             }
-
+        
         return scored.sort((a, b) => b.score - a.score).slice(0, limit);
     }
 
@@ -219,6 +220,11 @@ class SearchEngine {
             return 0;
         
         return intersection.size / union.size;
+    }
+
+    // 🆕 NEW: Get engine stats for health check
+    getStats() {
+        return {indexSize: this.questionIndex.size, cacheSize: this.qaCache.length, ready: this.ready};
     }
 }
 
