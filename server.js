@@ -32,13 +32,18 @@ let serverReady = false;
 
 async function initializeServices() {
     try {
+        // ✅ Initialize Dialogflow FIRST
+        if (config.useDialogflow) {
+            dialogflowUtil.initializeDialogflow();
+        }
+
         // Load Q&A data from Firestore
         console.log('📊 Loading Q&A data from Firestore...');
-        await firestoreUtil.loadQACache(); // ✅ CORRECT FUNCTION NAME
+        await firestoreUtil.loadQACache();
         const qaCache = firestoreUtil.getCache();
         console.log(`✅ Q&A data loaded into cache\n`);
 
-        // 🆕 Initialize search engine
+        // Initialize search engine
         searchEngine.initialize(qaCache);
 
         // Initialize semantic matching
@@ -130,7 +135,7 @@ app.get('/api/search-questions', (req, res) => {
     }
 });
 
-// Chat endpoint
+// Chat endpoint Chat endpoint Chat endpoint
 app.post('/api/chat', async(req, res) => {
     const {message, sessionId, userId, preferredMethod} = req.body;
     console.log(`\n❓ User question: "${message}" [Method: ${preferredMethod}]`);
@@ -146,8 +151,8 @@ app.post('/api/chat', async(req, res) => {
     let method = '';
 
     try {
-        // Try Dialogflow first if enabled
-        if (config.useDialogflow && preferredMethod === 'dialogflow') {
+        // Try Dialogflow first if enabled and (dialogflow selected OR hybrid mode)
+        if (config.useDialogflow && (preferredMethod === 'dialogflow' || preferredMethod === 'hybrid')) {
             try {
                 result = await dialogflowUtil.detectIntent(message, sessionId);
                 if (result && result.answer) {
@@ -159,14 +164,24 @@ app.post('/api/chat', async(req, res) => {
             }
         }
 
-        // Semantic search
-        if (!result && preferredMethod === 'semantic' && semanticUtil.isReady()) {
+        // Semantic search (if not found yet and semantic/hybrid selected)
+        if (!result && (preferredMethod === 'semantic' || preferredMethod === 'hybrid') && semanticUtil.isReady()) {
             result = semanticUtil.searchSemantic(message, qaCache);
             method = 'semantic';
-            console.log(`✓ Found via cached semantic search: "${result.question}"`);
+            console.log(`✓ Found via semantic search: "${result.question}"`);
         }
 
-        // Keyword matching (fallback)
+        // Fuzzy search (if fuzzy selected)
+        if (!result && preferredMethod === 'fuzzy') {
+            const fuzzyResults = searchEngine.search(message, 'fuzzy', 1);
+            if (fuzzyResults && fuzzyResults.length > 0) {
+                result = fuzzyResults[0];
+                method = 'fuzzy';
+                console.log(`✓ Found via fuzzy search: "${result.question}"`);
+            }
+        }
+
+        // Keyword matching (fallback or if keyword selected)
         if (!result) {
             result = matchingUtil.findBestMatch(message, qaCache);
             method = 'keyword';
@@ -183,6 +198,7 @@ app.post('/api/chat', async(req, res) => {
             method: method,
             confidence: result.score || result.similarity || 0
         });
+
     } catch (error) {
         console.error('Chat error:', error);
         res.json({reply: "An error occurred. Please try again.", method: 'error'});

@@ -5,7 +5,7 @@ let dialogflowClient = null;
 
 function initializeDialogflow() {
     if (config.useDialogflow) {
-        console.log('Initializing Dialogflow client');
+        console.log('✅ Initializing Dialogflow client');
         dialogflowClient = new SessionsClient();
         return true;
     }
@@ -34,12 +34,18 @@ async function detectIntent(userMessage, sessionId) {
         const [response] = await dialogflowClient.detectIntent(request);
         const result = response.queryResult;
 
-        console.log(`Dialogflow detected intent: ${result.intent.displayName}`);
-        console.log(`Confidence: ${(result.intentDetectionConfidence * 100).toFixed(1)}%`);
+        console.log(`☁️  Dialogflow intent: ${result.intent.displayName}`);
+        console.log(`   Confidence: ${ (result.intentDetectionConfidence * 100).toFixed(1)}%`);
 
-        return {intent: result.intent.displayName, confidence: result.intentDetectionConfidence, fulfillmentText: result.fulfillmentText};
+        // ✅ Return consistent format with answer/question fields
+        return {
+            answer: result.fulfillmentText, question: userMessage, // Original question
+            intent: result.intent.displayName,
+            score: result.intentDetectionConfidence
+        };
+
     } catch (error) {
-        console.error('Dialogflow error:', error.message);
+        console.error('❌ Dialogflow error:', error.message);
         return null;
     }
 }

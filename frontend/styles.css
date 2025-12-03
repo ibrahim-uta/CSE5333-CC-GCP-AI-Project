@@ -523,3 +523,16 @@ body {
     opacity: 0.5;
     pointer-events: none;
 }
+
+
+.message-metadata {
+    font-size: 0.75rem;
+    color: #666;
+    margin-top: 0.5rem;
+    opacity: 0.7;
+    font-style: italic;
+}
+
+.message.bot .message-metadata {
+    text-align: left;
+}

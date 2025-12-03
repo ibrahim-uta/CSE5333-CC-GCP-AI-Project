@@ -331,11 +331,11 @@ async function sendMessage(message) {
 
         const data = await response.json();
 
-        // Show confidence and method
-        const confidence = Math.round((data.confidence || 0) * 100);
-        const reply = `${data.reply}\n\n📊 Confidence: ${confidence}% (${data.method})`;
-
-        addMessage(reply, 'bot');
+        // ✅ Pass confidence and method separately
+        addMessage(data.reply, 'bot', {
+            confidence: data.confidence,
+            method: data.method
+        });
 
         // Save to state
         state
@@ -351,8 +351,7 @@ async function sendMessage(message) {
     }
 }
 
-// Add message to chat
-function addMessage(text, sender) {
+function addMessage(text, sender, metadata = null) {
     const messagesContainer = document.getElementById('chatMessages');
     if (!messagesContainer) 
         return;
@@ -373,7 +372,25 @@ function addMessage(text, sender) {
     contentDiv.textContent = text;
 
     messageDiv.appendChild(contentDiv);
-    messagesContainer.appendChild(messageDiv);
 
+    // ✅ Add confidence badge below bot messages
+    if (sender === 'bot' && metadata && metadata.method) {
+        const confidenceDiv = document.createElement('div');
+        confidenceDiv.className = 'message-metadata';
+
+        const confidence = Math.round((metadata.confidence || 0) * 100);
+        const methodEmoji = {
+            'dialogflow': '☁️',
+            'semantic': '🧠',
+            'fuzzy': '🔤',
+            'keyword': '⚡',
+            'hybrid': '🎯'
+        }[metadata.method] || '📊';
+
+        confidenceDiv.textContent = `${methodEmoji} ${metadata.method} • ${confidence}% confidence`;
+        messageDiv.appendChild(confidenceDiv);
+    }
+
+    messagesContainer.appendChild(messageDiv);
     messagesContainer.scrollTop = messagesContainer.scrollHeight;
 }

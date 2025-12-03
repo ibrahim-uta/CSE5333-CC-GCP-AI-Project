@@ -1,12 +1,28 @@
+# Node / build artifacts
 node_modules
 npm-debug.log
-.env
-.env.*
-!.env.example
+yarn.lock
+
+# Python venv
+venv
+
+# Git / CI
 .git
 .gitignore
-*.md
-firebase.json
-wikipedia_qa_dataset.json
-wikipedia_qa_sample.json
-download_wikipedia_qa.py
+.gcloudignore
+
+# Local env and secrets
+.env
+*.env
+serviceAccountKey.json
+
+# Large local data you do NOT want in the container
+# (uncomment these if you move them to Cloud Storage later)
+# qa_data.json
+# qa_embeddings.faiss
+# wikipedia_qa_dataset.json
+# wikipedia_qa_sample.json
+
+# OS/editor junk
+.DS_Store
+*.swp
