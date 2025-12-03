@@ -240,20 +240,16 @@ function showSuggestions(suggestions, method) {
         const div = document.createElement('div');
         div.className = 'suggestion-item';
 
-        const confidence = Math.round(item.score * 100);
-        const emoji = confidence >= 80
-            ? '🟢'
-            : confidence >= 50
-                ? '🟡'
-                : '🟠';
+        const confidence = Math.round((item.score || 0) * 100);
+        const emoji = confidence >= 80 ? '🟢' : confidence >= 50 ? '🟡' : '🟠';
 
         div.innerHTML = `
-            <div class="suggestion-question">
-                ${emoji} ${item.question}
-                <span class="confidence-score">${confidence}%</span>
-            </div>
-            <div class="suggestion-preview">${item.preview}</div>
+        <div class="suggestion-question">
+            ${emoji} ${item.question}
+            <span class="confidence-score">${confidence}%</span>
+        </div>
         `;
+
 
         div.onclick = () => selectSuggestion(index);
         dropdown.appendChild(div);
