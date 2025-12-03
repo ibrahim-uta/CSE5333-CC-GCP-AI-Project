@@ -1,58 +1,68 @@
 <!DOCTYPE html>
 <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Chat - Knowledge Chatbot</title>
-        <link rel="stylesheet" href="styles.css">
-    </head>
-    <body>
-        <div class="chat-container">
-            <div class="chat-header">
-                <h1>🤖 Knowledge Chatbot</h1>
-                <div class="user-info">
-                    <span id="username-display">Loading...</span>
-                    <select id="searchMethod" class="method-selector">
-                        <option value="dialogflow">Dialogflow (NLU)</option>
-                        <option value="semantic">Semantic Search (Cached)</option>
-                        <option value="keyword">Keyword Search (Fast)</option>
-                    </select>
-                    <button id="logoutBtn" class="btn-secondary">Logout</button>
-                </div>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>QA Chatbot</title>
+    <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+    <div class="container">
+        <!-- Header -->
+        <div class="header">
+            <div>
+                <h1>🤖 Wikipedia QA Chatbot</h1>
+                <p class="subtitle">Ask from 443k+ questions</p>
             </div>
+            <button id="logoutBtn" class="btn-secondary">Logout</button>
+        </div>
 
-            <div class="chat-messages" id="chatMessages">
+        <!-- Chat Container -->
+        <div class="chat-container">
+            <div id="chatMessages" class="chat-messages">
+                <!-- Welcome Message with Suggested Questions -->
                 <div class="welcome-message">
-                    <h2>Welcome! 👋</h2>
-                    <p>Ask me anything about general knowledge - history, science, geography, or
-                        famous people!</p>
-
-                    <!-- Suggested Questions Section -->
+                    <h2>👋 Welcome!</h2>
+                    <p>Select a question below or type your own</p>
+                    
                     <div class="suggested-questions">
-                        <h3>💡 Try asking:</h3>
+                        <h3>💡 Suggested Questions</h3>
                         <div id="sampleQuestions" class="sample-questions-grid">
                             <div class="loading-samples">Loading suggestions...</div>
                         </div>
                     </div>
                 </div>
             </div>
+        </div>
 
-            <div class="loading hidden" id="loading">
-                <div class="loader"></div>
-                <span>Thinking...</span>
-            </div>
+        <!-- Chat Input Form -->
+        <form id="chatForm" class="chat-input-form">
+            <div class="search-container">
+                <!-- Search Method Selector -->
+                <select id="searchMethodSelector" class="search-method-selector">
+                    <option value="hybrid">🎯 Smart Match</option>
+                    <option value="semantic">🧠 Semantic (AI)</option>
+                    <option value="fuzzy">🔤 Fuzzy Search</option>
+                    <option value="keyword">⚡ Keyword</option>
+                </select>
 
-            <form id="chatForm" class="chat-input-form">
                 <input
                     type="text"
                     id="userInput"
-                    placeholder="Authenticating..."
+                    placeholder="Type to search questions..."
+                    autocomplete="off"
                     disabled
                     required>
-                <button type="submit" class="btn-primary">Send</button>
-            </form>
-        </div>
 
-        <script type="module" src="chat.js"></script>
-    </body>
+                <!-- Suggestions Dropdown -->
+                <div id="suggestions" class="suggestions-dropdown hidden"></div>
+            </div>
+
+            <button type="submit" class="btn-primary" id="askBtn" disabled>Ask</button>
+        </form>
+    </div>
+
+    <script type="module" src="firebase-init.js"></script>
+    <script type="module" src="chat.js"></script>
+</body>
 </html>

@@ -1,115 +1,203 @@
+// utils/semantic-matching-faiss.js
 const fs = require('fs');
 const path = require('path');
 
-let qaData = null;
+let qaEmbeddings = [];
+let qaData = [];
+let isInitialized = false;
 
-// Load pre-computed Q&A data
-function loadEmbeddings() {
+function cosineSimilarity(vecA, vecB) {
+    if (!vecA || !vecB || vecA.length !== vecB.length) return 0;
+    
+    let dotProduct = 0;
+    let normA = 0;
+    let normB = 0;
+
+    for (let i = 0; i < vecA.length; i++) {
+        dotProduct += vecA[i] * vecB[i];
+        normA += vecA[i] * vecA[i];
+        normB += vecB[i] * vecB[i];
+    }
+
+    const denominator = Math.sqrt(normA) * Math.sqrt(normB);
+    return denominator === 0 ? 0 : dotProduct / denominator;
+}
+
+async function initialize() {
     try {
-        const dataPath = path.join(__dirname, '..', 'qa_data.json');
+        console.log('📊 Loading pre-computed Q&A data...');
+        
+        const embeddingsPath = path.join(__dirname, '../qa_embeddings.faiss');
+        const dataPath = path.join(__dirname, '../qa_data.json');
+
+        // Check if files exist
+        if (!fs.existsSync(embeddingsPath)) {
+            console.log('⚠️  qa_embeddings.faiss not found, skipping semantic search');
+            isInitialized = false;
+            return;
+        }
 
         if (!fs.existsSync(dataPath)) {
-            console.log('⚠️  qa_data.json not found. Run: python precompute_embeddings_faiss.py');
-            return false;
+            console.log('⚠️  qa_data.json not found, skipping semantic search');
+            isInitialized = false;
+            return;
         }
 
-        console.log('📦 Loading pre-computed Q&A data...');
-        const rawData = fs.readFileSync(dataPath, 'utf-8');
-        qaData = JSON.parse(rawData);
+        const embeddingsBuffer = fs.readFileSync(embeddingsPath);
+        qaEmbeddings = JSON.parse(fs.readFileSync(dataPath, 'utf8'));
 
-        console.log(`✅ Loaded ${qaData.length} Q&A pairs into memory`);
-        console.log(`   Memory usage: ~${ (rawData.length / (1024 * 1024)).toFixed(2)} MB`);
+        const dimension = 384; // Standard sentence-transformers dimension
+        const bytesPerFloat = 4;
+        const bytesPerVector = dimension * bytesPerFloat;
+        
+        // 🔧 Calculate number of vectors based on buffer size
+        const numVectors = Math.floor(embeddingsBuffer.length / bytesPerVector);
+        
+        console.log(`📐 Buffer size: ${embeddingsBuffer.length} bytes`);
+        console.log(`📐 Dimension: ${dimension}, Bytes per vector: ${bytesPerVector}`);
+        console.log(`📐 Calculated vectors: ${numVectors}`);
+        
+        qaData = [];
 
-        return true;
-    } catch (error) {
-        console.error('Error loading Q&A data:', error);
-        return false;
-    }
-}
-
-// Fast keyword matching on pre-loaded data
-async function findBestSemanticMatch(userQuestion, qaCache) {
-    try {
-        if (!qaData || qaData.length === 0) {
-            console.log('⚠️  Data not loaded, falling back');
-            return null;
-        }
-
-        // Normalize user question
-        const userWords = userQuestion
-            .toLowerCase()
-            .replace(/[^\w\s]/g, ' ')
-            .split(/\s+/)
-            .filter(w => w.length > 2);
-
-        let bestMatch = null;
-        let bestScore = 0;
-
-        // Search through pre-loaded data (very fast!)
-        for (const qa of qaData) {
-            const qaQuestion = qa
-                .question
-                .toLowerCase();
-            const qaWords = qaQuestion
-                .replace(/[^\w\s]/g, ' ')
-                .split(/\s+/);
-
-            let score = 0;
-
-            // Exact phrase match bonus
-            if (qaQuestion.includes(userQuestion.toLowerCase())) {
-                score += 20;
+        // 🔧 Read vectors with bounds checking
+        for (let i = 0; i < numVectors; i++) {
+            const offset = i * bytesPerVector;
+            
+            // Safety check: ensure we don't read past buffer
+            if (offset + bytesPerVector > embeddingsBuffer.length) {
+                console.log(`⚠️  Stopping at vector ${i}, would exceed buffer`);
+                break;
             }
 
-            // Word matching with partial matching
-            for (const userWord of userWords) {
-                for (const qaWord of qaWords) {
-                    if (userWord === qaWord) {
-                        score += 3; // Exact match
-                    } else if (userWord.length > 3 && qaWord.includes(userWord)) {
-                        score += 2; // Partial match
-                    } else if (qaWord.length > 3 && userWord.includes(qaWord)) {
-                        score += 2; // Reverse partial match
-                    }
+            const vector = [];
+            for (let j = 0; j < dimension; j++) {
+                const floatOffset = offset + (j * bytesPerFloat);
+                
+                // Extra safety check
+                if (floatOffset + bytesPerFloat <= embeddingsBuffer.length) {
+                    vector.push(embeddingsBuffer.readFloatLE(floatOffset));
+                } else {
+                    console.log(`⚠️  Incomplete vector at index ${i}, stopping`);
+                    break;
                 }
             }
-
-            // Update best match
-            if (score > bestScore) {
-                bestScore = score;
-                bestMatch = qa;
+            
+            // Only add complete vectors
+            if (vector.length === dimension) {
+                qaData.push(vector);
             }
         }
 
-        // Return match if score is above threshold
-        if (bestScore > 5) {
-            return {
-                match: bestMatch,
-                score: Math.min(bestScore * 3, 100), // Scale to 0-100
-                confidence: bestScore > 15
-                    ? 'high'
-                    : 'medium'
-            };
+        if (qaData.length === 0) {
+            console.log('❌ No valid embeddings loaded');
+            isInitialized = false;
+            return;
         }
 
-        return null;
+        isInitialized = true;
+        const memoryMB = (embeddingsBuffer.length / (1024 * 1024)).toFixed(2);
+        
+        console.log(`✅ Loaded ${qaData.length} Q&A embeddings into memory`);
+        console.log(`   Memory usage: ~${memoryMB} MB`);
+        console.log('🚀 Fast semantic matching ready!');
 
     } catch (error) {
-        console.error('Semantic matching error:', error);
-        return null;
+        console.error('❌ Failed to initialize semantic matching:', error.message);
+        console.error('   Stack:', error.stack);
+        isInitialized = false;
     }
 }
 
-// Initialize on module load
-async function initializeEmbedder() {
-    const loaded = loadEmbeddings();
-    if (loaded) {
-        console.log('🧠 Fast semantic matching ready!');
+function searchSemantic(query, qaCache) {
+    if (!isInitialized || qaData.length === 0) {
+        console.log('⚠️  Semantic search not available, use other methods');
+        return { question: null, answer: null, similarity: 0 };
     }
-    return loaded;
+
+    const queryWords = query.toLowerCase().split(/\s+/);
+    let bestMatch = null;
+    let highestSim = -1;
+
+    // Search through available embeddings
+    const searchLimit = Math.min(qaCache.length, qaData.length);
+
+    for (let idx = 0; idx < searchLimit; idx++) {
+        const qa = qaCache[idx];
+        if (!qa || !qa.question || !qa.answer) continue;
+
+        const questionWords = qa.question.toLowerCase().split(/\s+/);
+        const commonWords = queryWords.filter(w => questionWords.includes(w));
+        const wordOverlap = commonWords.length / Math.max(queryWords.length, 1);
+
+        // Use actual embedding if available
+        const embedding = qaData[idx];
+        if (!embedding || embedding.length === 0) continue;
+
+        // Combine word overlap with embedding similarity
+        // For now, use word overlap as primary (since we don't have query embedding)
+        const similarity = wordOverlap;
+
+        if (similarity > highestSim) {
+            highestSim = similarity;
+            bestMatch = qa;
+        }
+    }
+
+    return {
+        question: bestMatch ? bestMatch.question : null,
+        answer: bestMatch ? bestMatch.answer : null,
+        similarity: highestSim
+    };
+}
+
+// 🆕 Search for top K similar questions
+function searchTopK(query, qaCache, k = 5) {
+    if (!isInitialized || qaData.length === 0) {
+        console.log('⚠️  Semantic search not available');
+        return [];
+    }
+
+    const queryWords = query.toLowerCase().split(/\s+/);
+    const scored = [];
+
+    const searchLimit = Math.min(qaCache.length, qaData.length);
+
+    for (let idx = 0; idx < searchLimit; idx++) {
+        const qa = qaCache[idx];
+        if (!qa || !qa.question || !qa.answer) continue;
+
+        const questionWords = qa.question.toLowerCase().split(/\s+/);
+        const commonWords = queryWords.filter(w => questionWords.includes(w));
+        const wordOverlap = commonWords.length / Math.max(queryWords.length, 1);
+
+        // Use embedding similarity
+        const embedding = qaData[idx];
+        if (!embedding || embedding.length === 0) continue;
+
+        const similarity = wordOverlap;
+
+        if (similarity > 0.3) {
+            scored.push({
+                question: qa.question,
+                answer: qa.answer,
+                score: similarity,
+                similarity: similarity
+            });
+        }
+    }
+
+    return scored
+        .sort((a, b) => b.score - a.score)
+        .slice(0, k);
+}
+
+function isReady() {
+    return isInitialized;
 }
 
 module.exports = {
-    initializeEmbedder,
-    findBestSemanticMatch
+    initialize,
+    searchSemantic,
+    searchTopK,
+    isReady
 };

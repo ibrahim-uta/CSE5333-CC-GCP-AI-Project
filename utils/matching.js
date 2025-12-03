@@ -1,6 +1,6 @@
 /**
-    Keyword-based question matching (fallback when Dialogflow is disabled)
-    Find best matching question using keyword similarity
+ * Keyword-based question matching (fallback when Dialogflow is disabled)
+ * Find best matching question using keyword similarity
  */
 function findBestMatch(userQuestion, qaCache) {
     const userWords = userQuestion
@@ -13,6 +13,11 @@ function findBestMatch(userQuestion, qaCache) {
     let bestScore = 0;
 
     for (const qa of qaCache) {
+        // ✅ DEFENSIVE CHECK: Skip entries with missing or invalid question field
+        if (!qa || !qa.question || typeof qa.question !== 'string') {
+            continue;
+        }
+
         const qaWords = qa
             .question
             .toLowerCase()
@@ -20,6 +25,7 @@ function findBestMatch(userQuestion, qaCache) {
             .split(/\s+/);
 
         let score = 0;
+
         for (const userWord of userWords) {
             for (const qaWord of qaWords) {
                 if (userWord === qaWord || (userWord.length > 3 && qaWord.includes(userWord)) || (qaWord.length > 3 && userWord.includes(qaWord))) {
@@ -42,6 +48,8 @@ function findBestMatch(userQuestion, qaCache) {
     return bestScore > 5
         ? {
             match: bestMatch,
+            question: bestMatch.question,
+            answer: bestMatch.answer,
             score: bestScore
         }
         : null;
@@ -53,7 +61,7 @@ function getRandomSamples(qaCache, count) {
 
     while (samples.length < count && samples.length < qaCache.length) {
         const idx = Math.floor(Math.random() * qaCache.length);
-        if (!used.has(idx)) {
+        if (!used.has(idx) && qaCache[idx] && qaCache[idx].question) {
             used.add(idx);
             samples.push(qaCache[idx].question);
         }

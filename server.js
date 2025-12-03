@@ -1,268 +1,225 @@
 const express = require('express');
 const cors = require('cors');
-const {v4: uuidv4} = require('uuid');
-
-const config = require('./utils/config');
-const firestoreUtil = require('./utils/firestore');
-const dialogflowUtil = require('./utils/dialogflow');
-const matchingUtil = require('./utils/matching');
-const semanticMatching = require('./utils/semantic-matching-faiss');
-
 const path = require('path');
+require('dotenv').config();
 
 const app = express();
+const PORT = process.env.PORT || 3000;
 
 // Middleware
 app.use(cors());
 app.use(express.json());
-app.use(express.urlencoded({extended: true}));
+app.use(express.static('frontend'));
 
-// Serve static files from frontend folder at /frontend path
-app.use('/frontend', express.static(path.join(__dirname, 'frontend')));
+// Import utilities
+const config = require('./utils/config');
+const firestoreUtil = require('./utils/firestore');
+const dialogflowUtil = require('./utils/dialogflow');
+const matchingUtil = require('./utils/matching');
+const semanticUtil = require('./utils/semantic-matching-faiss');
+const searchEngine = require('./utils/search-engine'); // 🆕 NEW
 
-// Initialize services (don't wait for data here)
-firestoreUtil.initializeFirestore();
-dialogflowUtil.initializeDialogflow();
+console.log('============================================================');
+console.log(`Environment: ${config.environment}`);
+console.log(`Dialogflow: ${config.useDialogflow
+    ? 'ENABLED'
+    : 'DISABLED'}`);
+console.log(`Project ID: ${config.projectId}`);
+console.log('============================================================\n');
 
-// Root route - serves the redirect index.html
-app.get('/', (req, res) => {
-    res.sendFile(path.join(__dirname, 'index.html'));
-});
+// Initialize services
+let serverReady = false;
 
-// Firebase config endpoint
-app.get('/api/firebase-config', (req, res) => {
-    res.json(config.firebase);
-});
-
-// Chat history endpoint
-app.post('/api/chat-history', async(req, res) => {
+async function initializeServices() {
     try {
-        const {userId, message, reply, sessionId} = req.body;
+        // Load Q&A data from Firestore
+        console.log('📊 Loading Q&A data from Firestore...');
+        await firestoreUtil.loadQACache(); // ✅ CORRECT FUNCTION NAME
+        const qaCache = firestoreUtil.getCache();
+        console.log(`✅ Q&A data loaded into cache\n`);
 
-        if (!userId) {
-            return res
-                .status(400)
-                .json({error: 'userId is required'});
+        // 🆕 Initialize search engine
+        searchEngine.initialize(qaCache);
+
+        // Initialize semantic matching
+        console.log('🧠 Initializing semantic embedder...');
+        await semanticUtil.initialize();
+        console.log('✅ Semantic matching ready\n');
+
+        serverReady = true;
+
+        console.log('============================================================');
+        console.log(`🚀 Server running: http://localhost:${PORT}`);
+        console.log('✅ All services ready - accepting requests!');
+        console.log('============================================================\n');
+    } catch (error) {
+        console.error('❌ Initialization error:', error);
+        process.exit(1);
+    }
+}
+
+// Health check
+app.get('/api/health', (req, res) => {
+    res.json({
+        status: serverReady
+            ? 'ready'
+            : 'initializing',
+        services: {
+            firestore: firestoreUtil.isDataLoaded(),
+            semantic: semanticUtil.isReady(),
+            searchEngine: searchEngine.ready
+        }
+    });
+});
+
+// 🆕 Firebase config endpoint (ADDED TO FIX YOUR ERROR)
+app.get('/api/firebase-config', (req, res) => {
+    res.json({
+        apiKey: config.firebase.apiKey,
+        authDomain: config.firebase.authDomain,
+        projectId: config.firebase.projectId,
+        storageBucket: config.firebase.storageBucket,
+        messagingSenderId: config.firebase.messagingSenderId,
+        appId: config.firebase.appId
+    });
+});
+
+// 🆕 OPTIMIZED SEARCH ENDPOINT (NEW!)
+app.get('/api/search-questions', (req, res) => {
+    const query = req.query.q;
+    const limit = parseInt(req.query.limit) || 5;
+    const method = req.query.method || 'hybrid';
+
+    if (!query || query.length < 2) {
+        return res.json({suggestions: []});
+    }
+
+    if (!firestoreUtil.isDataLoaded()) {
+        return res.json({suggestions: [], error: 'Data not loaded'});
+    }
+
+    console.log(`🔍 Search: "${query}" [${method}, limit=${limit}]`);
+
+    try {
+        let results = [];
+        const qaCache = firestoreUtil.getCache();
+
+        if (method === 'semantic' && semanticUtil.isReady()) {
+            // Use FAISS semantic search
+            results = semanticUtil.searchTopK(query, qaCache, limit);
+            console.log(`  ✓ Semantic (FAISS): ${results.length} results`);
+        } else {
+            // Use optimized search engine
+            results = searchEngine.search(query, method, limit);
+            console.log(`  ✓ ${method}: ${results.length} results`);
         }
 
-        const historyRef = await firestoreUtil
-            .getFirestore()
-            .collection('chat_history')
-            .add({
-                userId: userId,
-                message: message,
-                reply: reply,
-                sessionId: sessionId,
-                timestamp: new Date().toISOString()
-            });
+        const suggestions = results.map(r => ({
+            question: r.question,
+            answer: r.answer,
+            score: r.score || r.similarity || 0,
+            preview: r
+                .answer
+                .substring(0, 80) + '...'
+        }));
 
-        res.json({success: true, id: historyRef.id});
+        res.json({suggestions, method, count: suggestions.length, totalQuestions: qaCache.length});
     } catch (error) {
-        console.error('Error saving chat history:', error);
-        res
-            .status(500)
-            .json({error: 'Failed to save chat history'});
+        console.error('Search error:', error);
+        res.json({suggestions: [], error: 'Search failed'});
     }
 });
 
-// Health check endpoint
-app.get('/health', (req, res) => {
-    const isLoaded = firestoreUtil.isDataLoaded();
-    res
-        .status(200)
-        .json({
-            status: 'healthy', 
-            dataLoaded: isLoaded, 
-            dialogflowEnabled: config.useDialogflow
-        });
-});
-
-// Main chat endpoint
+// Chat endpoint
 app.post('/api/chat', async(req, res) => {
+    const {message, sessionId, userId, preferredMethod} = req.body;
+    console.log(`\n❓ User question: "${message}" [Method: ${preferredMethod}]`);
+
+    if (!firestoreUtil.isDataLoaded()) {
+        return res
+            .status(503)
+            .json({error: 'Service initializing'});
+    }
+
+    const qaCache = firestoreUtil.getCache();
+    let result = null;
+    let method = '';
+
     try {
-        const {message, sessionId, preferredMethod} = req.body;
-
-        if (!message) {
-            return res.status(400).json({error: 'Message is required'});
-        }
-
-        if (!firestoreUtil.isDataLoaded()) {
-            return res.status(503).json({
-                error: 'Service is loading data. Please try again in a moment.'
-            });
-        }
-
-        const userSessionId = sessionId || uuidv4();
-        console.log(`\n❓ User question: "${message}" [Method: ${preferredMethod || 'auto'}]`);
-
-        let answer = null;
-        let matchedQuestion = null;
-        let confidence = 'none';
-        let method = 'none';
-
-        // Try Dialogflow if enabled and either preferred or auto
-        if (dialogflowUtil.isDialogflowEnabled() && 
-            (preferredMethod === 'dialogflow' || !preferredMethod)) {
+        // Try Dialogflow first if enabled
+        if (config.useDialogflow && preferredMethod === 'dialogflow') {
             try {
-                const dialogflowResult = await dialogflowUtil.detectIntent(message, userSessionId);
-                if (dialogflowResult && dialogflowResult.confidence > 0.5) {
-                    const result = await firestoreUtil.findAnswerByIntent(dialogflowResult.intent);
-                    if (result) {
-                        answer = result.answer;
-                        matchedQuestion = result.question;
-                        confidence = dialogflowResult.confidence > 0.8 ? 'high' : 'medium';
-                        method = 'dialogflow';
-                        console.log(`✓ Found via Dialogflow: "${matchedQuestion}" (confidence: ${(dialogflowResult.confidence * 100).toFixed(1)}%)`);
-                    }
+                result = await dialogflowUtil.detectIntent(message, sessionId);
+                if (result && result.answer) {
+                    method = 'dialogflow';
+                    console.log(`✓ Dialogflow response`);
                 }
             } catch (error) {
-                console.error('Dialogflow error:', error.message);
-                console.log('Falling back to other methods...');
+                console.log(`⚠️ Dialogflow failed, falling back...`);
             }
         }
 
-
-        // Use user's preferred method
-        if (!answer) {
-            const qaCache = firestoreUtil.getCache();
-            
-            // Try semantic search if requested
-            if (preferredMethod === 'semantic') {
-                try {
-                    const semanticResult = await semanticMatching.findBestSemanticMatch(message, qaCache);
-                    
-                    if (semanticResult) {
-                        answer = semanticResult.match.answer;
-                        matchedQuestion = semanticResult.match.question;
-                        confidence = semanticResult.confidence;
-                        method = 'cached-semantic';
-                        console.log(`✓ Found via cached semantic search: "${matchedQuestion}"`);
-                    }
-                } catch (error) {
-                    console.log('Semantic search error, falling back to keyword');
-                }
-            }
-            
-            // Fallback to keyword matching
-            if (!answer) {
-                const keywordResult = matchingUtil.findBestMatch(message, qaCache);
-                if (keywordResult) {
-                    answer = keywordResult.match.answer;
-                    matchedQuestion = keywordResult.match.question;
-                    confidence = keywordResult.score > 15 ? 'high' : 'medium';
-                    method = 'keyword';
-                    console.log(`✓ Found via keyword matching: "${matchedQuestion}"`);
-                }
-            }
+        // Semantic search
+        if (!result && preferredMethod === 'semantic' && semanticUtil.isReady()) {
+            result = semanticUtil.searchSemantic(message, qaCache);
+            method = 'semantic';
+            console.log(`✓ Found via cached semantic search: "${result.question}"`);
         }
 
-        if (answer) {
-            res.json({
-                reply: answer,
-                matchedQuestion: matchedQuestion,
-                confidence: confidence,
-                method: method,
-                sessionId: userSessionId,
-                timestamp: new Date().toISOString()
-            });
-        } else {
-            console.log(`✗ No match found`);
-            res.json({
-                reply: "I'm sorry, I don't have a good answer to that question. Try asking about general knowledge topics!",
-                confidence: 'none',
-                method: 'none',
-                sessionId: userSessionId,
-                timestamp: new Date().toISOString()
-            });
+        // Keyword matching (fallback)
+        if (!result) {
+            result = matchingUtil.findBestMatch(message, qaCache);
+            method = 'keyword';
+            console.log(`✓ Found via keyword matching: "${result.question}"`);
         }
 
+        if (!result || !result.answer) {
+            return res.json({reply: "I couldn't find an answer. Please try searching from the suggestions.", method: 'none'});
+        }
+
+        res.json({
+            reply: result.answer,
+            question: result.question,
+            method: method,
+            confidence: result.score || result.similarity || 0
+        });
     } catch (error) {
-        console.error('Error in /api/chat:', error);
-        res.status(500).json({error: 'Internal server error', message: error.message});
+        console.error('Chat error:', error);
+        res.json({reply: "An error occurred. Please try again.", method: 'error'});
     }
 });
 
 // Sample questions endpoint
 app.get('/api/sample-questions', (req, res) => {
-    const count = parseInt(req.query.count) || 10;
+    const count = parseInt(req.query.count) || 6;
+
     if (!firestoreUtil.isDataLoaded()) {
-        return res.status(503).json({error: 'Data not loaded yet'});
+        return res.json({questions: []});
     }
+
     const qaCache = firestoreUtil.getCache();
-    const samples = matchingUtil.getRandomSamples(qaCache, count);
 
-    res.json({count: samples.length, questions: samples});
-});
+    // Get random sample questions
+    const samples = [];
+    const used = new Set();
 
-
-// Stats endpoint
-app.get('/api/stats', (req, res) => {
-    const stats = firestoreUtil.getCacheStats();
-
-    res.json({
-        environment: config.environment,
-        dialogflowEnabled: config.useDialogflow,
-        totalQuestions: stats.totalQuestions,
-        isLoaded: stats.isLoaded,
-        projectId: config.projectId,
-        timestamp: new Date().toISOString()
-    });
-});
-
-// Admin endpoint to add Q&A pairs
-app.post('/api/admin/add-qa', async(req, res) => {
-    try {
-        const {intent, question, answer} = req.body;
-
-        if (!question || !answer) {
-            return res
-                .status(400)
-                .json({error: 'question and answer are required'});
+    while (samples.length < count && samples.length < qaCache.length) {
+        const idx = Math.floor(Math.random() * qaCache.length);
+        if (!used.has(idx) && qaCache[idx] && qaCache[idx].question) {
+            samples.push(qaCache[idx].question);
+            used.add(idx);
         }
-
-        const result = await firestoreUtil.addQAPair(intent, question, answer);
-
-        res.json({message: 'Q&A pair added successfully', id: result.id});
-
-    } catch (error) {
-        console.error('Error adding Q&A:', error);
-        res
-            .status(500)
-            .json({error: 'Failed to add Q&A pair', message: error.message});
     }
+
+    res.json({questions: samples});
 });
 
-// Start server AFTER loading all data
-async function startServer() {
-    console.log('='.repeat(60));
-    console.log(`Environment: ${config.environment}`);
-    console.log(`Dialogflow: ${config.useDialogflow ? 'ENABLED' : 'DISABLED'}`);
-    console.log(`Project ID: ${config.projectId}`);
-    console.log('='.repeat(60) + '\n');
+// Serve frontend
+app.get('*', (req, res) => {
+    res.sendFile(path.join(__dirname, 'frontend', 'chat.html'));
+});
 
-    try {
-        console.log('📊 Loading Q&A data from Firestore...');
-        await firestoreUtil.loadQACache();
-        console.log('✅ Q&A data loaded into cache\n');
-
-        console.log('🧠 Initializing semantic embedder...');
-        await semanticMatching.initializeEmbedder();
-        console.log('✅ Semantic matching ready\n');
-
-        // Start server AFTER all data is loaded
-        app.listen(config.port, () => {
-            console.log('='.repeat(60));
-            console.log(`🚀 Server running: http://localhost:${config.port}`);
-            console.log(`✅ All services ready - accepting requests!`);
-            console.log('='.repeat(60) + '\n');
-        });
-
-    } catch (error) {
-        console.error('❌ Failed to initialize server:', error);
-        console.error('Server NOT started. Fix the error and try again.');
-        process.exit(1);
-    }
-}
-
-// Initialize and start
-startServer();
+// Start server
+app.listen(PORT, () => {
+    initializeServices();
+});
