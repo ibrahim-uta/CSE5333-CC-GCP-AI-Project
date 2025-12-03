@@ -185,18 +185,15 @@ app.post('/api/chat', async(req, res) => {
 // Sample questions endpoint
 app.get('/api/sample-questions', (req, res) => {
     const count = parseInt(req.query.count) || 10;
-
     if (!firestoreUtil.isDataLoaded()) {
-        return res
-            .status(503)
-            .json({error: 'Data not loaded yet'});
+        return res.status(503).json({error: 'Data not loaded yet'});
     }
-
     const qaCache = firestoreUtil.getCache();
     const samples = matchingUtil.getRandomSamples(qaCache, count);
 
     res.json({count: samples.length, questions: samples});
 });
+
 
 // Stats endpoint
 app.get('/api/stats', (req, res) => {

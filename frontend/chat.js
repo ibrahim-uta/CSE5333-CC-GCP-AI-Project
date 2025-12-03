@@ -18,7 +18,7 @@ const API_URL = window.location.origin;
         const {auth: firebaseAuth} = await initializeFirebase();
         auth = firebaseAuth;
 
-        // Check Authentication - redirect if not logged in
+        // Check Authentication
         onAuthStateChanged(auth, (user) => {
             if (user) {
                 // User is authenticated
@@ -34,6 +34,9 @@ const API_URL = window.location.origin;
                     userInput.disabled = false;
                     userInput.placeholder = 'Type your question here...';
                 }
+
+                // Load sample questions
+                loadSampleQuestions();
             } else {
                 // Not authenticated, redirect to login
                 window
@@ -44,12 +47,45 @@ const API_URL = window.location.origin;
 
     } catch (error) {
         console.error('Chat initialization error:', error);
-        // On error, redirect to login
         window
             .location
             .replace('login.html');
     }
 })();
+
+// Load sample questions from API
+async function loadSampleQuestions() {
+    try {
+        const response = await fetch(`${API_URL}/api/sample-questions?count=6`);
+        const data = await response.json();
+
+        const container = document.getElementById('sampleQuestions');
+        container.innerHTML = ''; // Clear loading message
+
+        data
+            .questions
+            .forEach(qa => {
+                const button = document.createElement('button');
+                button.className = 'sample-question-btn';
+                button.textContent = qa.question;
+                button.onclick = () => {
+                    document
+                        .getElementById('userInput')
+                        .value = qa.question;
+                    document
+                        .getElementById('userInput')
+                        .focus();
+                };
+                container.appendChild(button);
+            });
+
+    } catch (error) {
+        console.error('Failed to load sample questions:', error);
+        document
+            .getElementById('sampleQuestions')
+            .innerHTML = '<p class="error-text">Could not load suggestions</p>';
+    }
+}
 
 // Logout Handler
 document
@@ -57,7 +93,6 @@ document
     .addEventListener('click', async() => {
         try {
             await signOut(auth);
-            // Redirect to login
             window
                 .location
                 .replace('login.html');

@@ -17,7 +17,6 @@
                         <option value="semantic">Semantic Search (Cached)</option>
                         <option value="keyword">Keyword Search (Fast)</option>
                     </select>
-
                     <button id="logoutBtn" class="btn-secondary">Logout</button>
                 </div>
             </div>
@@ -27,6 +26,14 @@
                     <h2>Welcome! 👋</h2>
                     <p>Ask me anything about general knowledge - history, science, geography, or
                         famous people!</p>
+
+                    <!-- Suggested Questions Section -->
+                    <div class="suggested-questions">
+                        <h3>💡 Try asking:</h3>
+                        <div id="sampleQuestions" class="sample-questions-grid">
+                            <div class="loading-samples">Loading suggestions...</div>
+                        </div>
+                    </div>
                 </div>
             </div>
 
