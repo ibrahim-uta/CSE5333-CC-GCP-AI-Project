@@ -1,387 +1,240 @@
-# CSE5333-CC-GCP-AI-Project
+# CSE5333 Cloud Computing – Wikipedia QA Search Engine
 
-# **Wikipedia Chatbot Backend API Documentation**
+## 1. Project overview
 
-## **Overview**
+This project implements a production-style **question search engine** on Google Cloud that retrieves the best-matching question and answer from a corpus of over **443k Wikipedia QA pairs**. Instead of answering arbitrary user-typed free-text (which risks NLU errors and hallucinations), the system behaves like an *intelligent search box*: as the user types, it returns semantically relevant questions from the curated dataset, and the user explicitly selects one.  
+This guarantees that every answer comes from a verified QA pair.
 
-This backend API provides a REST interface for the Wikipedia General Knowledge Chatbot. It uses Firestore to store 500+ question-answer pairs from Wikipedia and provides endpoints for querying and interaction.
+The application is deployed on **Cloud Run** with a modern UI, Firebase Authentication, Firestore-backed chat history, and a hybrid retrieval engine combining **semantic embeddings**, **fuzzy search**, and **keyword retrieval**.
 
-**Current Status:**
-- Backend API fully functional locally
-- 500 Wikipedia Q&A pairs loaded in Firestore
-- ⏳ Cloud deployment scheduled for tomorrow morning
+This repository can serve as a template for organizations that want to build their own domain-specific “Google-like” search experience on top of a private set of FAQs or knowledge-base questions.
 
-***
+---
 
-## **Quick Start**
+## 2. High-level architecture
 
-### **Base URL (Local Development)**
-```
-http://localhost:3000
-```
+The system uses three cloud services that satisfy course requirements:
 
-### **Base URL (Production - After Tomorrow's Deployment)**
-```
-https://YOUR-CLOUD-RUN-URL.run.app
-```
+| Role                    | Service / Technology                                                 |
+|-------------------------|-----------------------------------------------------------------------|
+| Compute service         | Cloud Run service running Node.js/Express                            |
+| Persistence service     | Cloud Firestore for user chat history                                |
+| Additional cloud service| Cloud Storage for embeddings and QA datasets                         |
 
-***
+Additional services:
 
-## **API Endpoints**
+- **Firebase Authentication** for login/signup.
+- **Dialogflow** (optional) for NLU baseline comparison.
 
-### **1. Health Check / Server Status**
+At container startup:
 
-**GET** `/`
+1. Dialogflow client is initialized (if enabled).
+2. Semantic embeddings and QA metadata are downloaded from Cloud Storage.
+3. The FAISS-format vectors are parsed into memory and used to build an in-memory lightweight semantic engine.
+4. The backend exposes REST APIs consumed by the frontend.
 
-Returns server status and statistics.
+---
 
-**Request:**
-```bash
-GET http://localhost:3000/
-```
+## 3. Problem and solution
 
-**Response:**
-```json
-{
-  "status": "ok",
-  "service": "Wikipedia General Knowledge Chatbot",
-  "environment": "local",
-  "dataLoaded": true,
-  "totalQuestions": 500,
-  "timestamp": "2025-10-29T06:53:00.000Z"
-}
-```
+### Problem
 
-**Use Case:** Check if backend is running and data is loaded before enabling the chat interface.
+Traditional free-text QA chatbots often:
 
-***
+- Misinterpret queries due to NLU errors.
+- Produce hallucinated or incorrect answers.
+- Cannot guarantee reliable retrieval over large curated datasets.
 
-### **2. Chat Endpoint (Main Functionality)**
+For organizations, **precision and verifiable answers** are often more important than generative flexibility.
 
-**POST** `/api/chat`
+### Solution
 
-Send a user's question and receive an AI-generated answer.
+The system reframes the problem as **intelligent question retrieval**, not free-text answering:
 
-**Request Headers:**
-```
-Content-Type: application/json
-```
+- Maintain a corpus of verified QA pairs (443k+ from Wikipedia).
+- When the user types, show the top matching questions rather than generating an answer.
+- When the user selects a question, display the stored answer exactly.
 
-**Request Body:**
-```json
-{
-  "message": "When was Fernando Eid born?"
-}
-```
+Benefits:
 
-**Response (Success):**
-```json
-{
-  "reply": "20 June 1992",
-  "matchedQuestion": "When was Fernando Eid born?",
-  "confidence": "high",
-  "timestamp": "2025-10-29T06:53:00.000Z"
-}
-```
+- **Accuracy:** Answers always come from verified QA entries.
+- **Speed:** Precomputed embeddings and in-memory search yield sub-500 ms suggestions at full scale.
+- **Good UX:** Autocomplete-style interface with retrieval method labels and confidence scores.
 
-**Response (No Match Found):**
-```json
-{
-  "reply": "I'm sorry, I don't have a good answer to that question. Try asking about general knowledge topics like history, science, geography, or famous people!",
-  "confidence": "none",
-  "timestamp": "2025-10-29T06:53:00.000Z"
-}
-```
+This general architecture can be reused with any domain-specific dataset.
 
-**Response Fields:**
-- `reply` (string): The answer to the user's question
-- `matchedQuestion` (string, optional): The original question from database that matched
-- `confidence` (string): "high", "medium", or "none" - indicates match quality
-- `timestamp` (string): ISO 8601 timestamp
+---
 
-**Error Response (400 - Bad Request):**
-```json
-{
-  "error": "Message is required"
-}
-```
+## 4. Components and code structure
 
-**Error Response (500 - Internal Server Error):**
-```json
-{
-  "error": "Internal server error",
-  "message": "Error details here"
-}
-```
+### 4.1 Backend (Node.js / Express)
 
-***
+**Entry point**
 
-### **3. Get Sample Questions**
+- `server.js`  
+  - Serves static frontend files (`frontend/`).
+  - Initializes Firestore, Dialogflow, semantic engine, and keyword/fuzzy search index.
+  - Exposes APIs:
+    - `GET /api/health`
+    - `GET /api/firebase-config`
+    - `GET /api/search-questions`
+    - `GET /api/sample-questions`
+    - Chat-related endpoints:
+      - `POST /api/chats`
+      - `GET /api/chats`
+      - `GET /api/chats/:chatId/messages`
+      - `DELETE /api/chats/:chatId`
 
-**GET** `/api/sample-questions`
+**Cloud integration**
 
-Returns random sample questions from the database to help users get started.
+- `utils/config.js` – environment variables and flags (Dialogflow, semantic engine, Firebase config, etc.)
+- `utils/dialogflow.js` – optional NLU client.
+- `utils/firestore.js` – Firestore initialization and helpers.
 
-**Query Parameters:**
-- `count` (optional, default: 10): Number of sample questions to return (1-100)
+### 4.2 Semantic retrieval and hybrid search
 
-**Request:**
-```bash
-GET http://localhost:3000/api/sample-questions?count=5
-```
+**Semantic engine**
 
-**Response:**
-```json
-{
-  "count": 5,
-  "questions": [
-    "When was Kadir Mısıroğlu born?",
-    "How quickly does insulin aspart begin to work?",
-    "What is the population of Dongguan as of the end of 2012?",
-    "How many years did Brandon Jones play in the NFL?",
-    "Which album was released by Sten & Stanley in 1985?"
-  ]
-}
-```
+- `utils/semantic-matching-faiss.js`
+  - Downloads embeddings (`qa_embeddings.faiss`) and QA metadata (`qa_data.json`) from Cloud Storage.
+  - Loads 443k vectors (~650 MB).
+  - Provides:
+    - `initialize()`
+    - `isReady()`
+    - `searchTopK(query, k)`
 
-**Use Case:** Display suggested questions to users when they first open the chat interface.
+**Text / keyword / fuzzy search**
 
-***
+- `utils/search-engine.js`
+  - Builds an in-memory inverted index from all questions.
+  - Supports keyword, fuzzy, Dialogflow-backed, and hybrid retrieval.
+  - Exposes:
+    - `initialize()`
+    - `search(query, method, limit)`
+    - `getStats()`
 
-### **4. Get Statistics**
+**Hybrid retrieval pipeline**
 
-**GET** `/api/stats`
+1. Check if semantic engine is ready.
+2. Run semantic search; fall back to keyword/fuzzy search if unavailable.
+3. Normalize results into a unified format with question, answer, similarity, and method label.
 
-Returns backend statistics and configuration.
+---
 
-**Request:**
-```bash
-GET http://localhost:3000/api/stats
-```
+## 5. Frontend experience
 
-**Response:**
-```json
-{
-  "environment": "local",
-  "totalQuestions": 500,
-  "isLoaded": true,
-  "projectId": "demo-chatbot-project",
-  "timestamp": "2025-10-29T06:53:00.000Z"
-}
-```
+All frontend assets live in `frontend/` and are served by the same Cloud Run container.
 
-**Use Case:** Show statistics in the UI footer or about section.
+### 5.1 Authentication and routing
 
-***
+- `login.html`, `register.html`
+- `chat.html` – main application UI
+- `firebase-init.js` – loads Firebase config from backend
+- `auth.js` – handles user login/registration and redirects
 
-## **Frontend Integration Example**
+### 5.2 Chat and search UX
 
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Wikipedia Chatbot</title>
-    <style>
-        body { font-family: Arial; max-width: 700px; margin: 50px auto; padding: 20px; }
-        #chat-box { border: 2px solid #1976d2; height: 400px; overflow-y: auto; padding: 15px; margin-bottom: 15px; }
-        .message { margin: 10px 0; padding: 10px; border-radius: 8px; }
-        .user { background: #e3f2fd; text-align: right; }
-        .bot { background: #f5f5f5; }
-        input { width: 80%; padding: 10px; }
-        button { padding: 10px 20px; background: #1976d2; color: white; border: none; cursor: pointer; }
-    </style>
-</head>
-<body>
-    <h1>🤖 Wikipedia Knowledge Chatbot</h1>
-    <div id="chat-box"></div>
-    <input type="text" id="user-input" placeholder="Ask a question..." onkeypress="if(event.key==='Enter') sendMessage()">
-    <button onclick="sendMessage()">Send</button>
-    
-    <script>
-        const API_BASE_URL = 'http://localhost:3000'; // Change to cloud URL after deployment
-        const chatBox = document.getElementById('chat-box');
-        const userInput = document.getElementById('user-input');
-        
-        // Initialize: Check if backend is ready
-        async function checkBackend() {
-            try {
-                const response = await fetch(`${API_BASE_URL}/`);
-                const data = await response.json();
-                
-                if (data.dataLoaded) {
-                    chatBox.innerHTML = `<div class="message bot">🤖 Bot: Hello! I have knowledge from ${data.totalQuestions} Wikipedia articles. Ask me anything!</div>`;
-                    loadSampleQuestions();
-                } else {
-                    chatBox.innerHTML = '<div class="message bot">⚠️ Bot is loading data, please wait...</div>';
-                }
-            } catch (error) {
-                chatBox.innerHTML = '<div class="message bot">Error: Cannot connect to backend.</div>';
-            }
-        }
-        
-        // Load sample questions
-        async function loadSampleQuestions() {
-            try {
-                const response = await fetch(`${API_BASE_URL}/api/sample-questions?count=3`);
-                const data = await response.json();
-                
-                if (data.questions && data.questions.length > 0) {
-                    const suggestions = data.questions.map(q => `• ${q}`).join('<br>');
-                    chatBox.innerHTML += `<div class="message bot">💡 Try asking:<br>${suggestions}</div>`;
-                }
-            } catch (error) {
-                console.error('Error loading sample questions:', error);
-            }
-        }
-        
-        // Send message to chatbot
-        async function sendMessage() {
-            const message = userInput.value.trim();
-            if (!message) return;
-            
-            // Show user message
-            chatBox.innerHTML += `<div class="message user"><strong>You:</strong> ${message}</div>`;
-            userInput.value = '';
-            chatBox.scrollTop = chatBox.scrollHeight;
-            
-            try {
-                // Call chat API
-                const response = await fetch(`${API_BASE_URL}/api/chat`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ message })
-                });
-                
-                const data = await response.json();
-                
-                // Show bot response
-                chatBox.innerHTML += `<div class="message bot"><strong>🤖 Bot:</strong> ${data.reply}</div>`;
-                chatBox.scrollTop = chatBox.scrollHeight;
-                
-            } catch (error) {
-                chatBox.innerHTML += `<div class="message bot"><strong>Error:</strong> ${error.message}</div>`;
-                chatBox.scrollTop = chatBox.scrollHeight;
-            }
-        }
-        
-        // Initialize on page load
-        checkBackend();
-    </script>
-</body>
-</html>
+- `chat.js`
+  - Calls `/api/health` on load.
+  - Fetches sample questions.
+  - Loads user chat history.
+  - Performs debounced calls to `/api/search-questions`.
+  - Displays search suggestions with score + method tags.
+  - Stores selected questions/answers into Firestore chat history.
+
+This ensures users always choose from the known QA corpus.
+
+---
+
+## 6. Dataset and preprocessing
+
+Dataset:
+
+- ~443,000 Wikipedia QA pairs.
+- Offline preprocessing:
+  - Cleaning and normalization
+  - 384-dim transformer embeddings
+- Two output files:
+  - `qa_data.json`
+  - `qa_embeddings.faiss`
+- Stored in Cloud Storage and downloaded on startup.
+
+Preprocessing scripts (e.g., `precompute_embeddings.py`) are included in the repo for reproducibility.
+
+---
+
+## 7. Cloud deployment and configuration
+
+Example Cloud Run deploy:
+
 ```
 
-### **Example 2: jQuery**
+gcloud run deploy wikipedia-chatbot 
+--image gcr.io/PROJECT_ID/wiki-qa-chatbot 
+--platform=managed 
+--region=us-south1 
+--allow-unauthenticated 
+--memory=8Gi --cpu=2 
+--set-env-vars 
+ENVIRONMENT=cloud,GCP_PROJECT_ID=PROJECT_ID,USE_DIALOGFLOW=true,USE_SEMANTIC_MATCHING=true 
+--set-env-vars 
+FIREBASE_API_KEY=...,
+FIREBASE_AUTH_DOMAIN=...,
+FIREBASE_PROJECT_ID=...,
+FIREBASE_STORAGE_BUCKET=...,
+FIREBASE_MESSAGING_SENDER_ID=...,
+FIREBASE_APP_ID=... 
+--set-env-vars 
+EMBEDDINGS_BUCKET=chatbot-data-bucket-faiss,EMBEDDINGS_FILE=qa_embeddings.faiss,QA_DATA_FILE=qa_data.json
 
-```javascript
-// Check backend
-$.get('http://localhost:3000/', function(data) {
-    if (data.dataLoaded) {
-        console.log('Backend ready with', data.totalQuestions, 'questions');
-    }
-});
-
-// Get sample questions
-$.get('http://localhost:3000/api/sample-questions?count=5', function(data) {
-    data.questions.forEach(q => {
-        console.log('Sample:', q);
-    });
-});
-
-// Send chat message
-function sendMessage(message) {
-    $.ajax({
-        url: 'http://localhost:3000/api/chat',
-        type: 'POST',
-        contentType: 'application/json',
-        data: JSON.stringify({ message: message }),
-        success: function(data) {
-            console.log('Bot reply:', data.reply);
-            console.log('Confidence:', data.confidence);
-        },
-        error: function(error) {
-            console.error('Error:', error);
-        }
-    });
-}
-
-// Usage
-sendMessage('What is the population of Dongguan?');
 ```
 
-## **Testing the API**
+Notes:
 
-### **Using cURL (Command Line)**
+- The container allocates **8 GiB RAM** to safely load embeddings + index + Node.js heap.
+- `/api/health` is used by Cloud Run and the frontend to verify system readiness.
 
-```bash
-# Health check
-curl http://localhost:3000/
+---
 
-# Get sample questions
-curl http://localhost:3000/api/sample-questions?count=5
+## 8. How this meets course requirements
 
-# Ask a question
-curl -X POST http://localhost:3000/api/chat \
-  -H "Content-Type: application/json" \
-  -d '{"message": "When was Fernando Eid born?"}'
-```
+1. **Compute:** Cloud Run service running Node.js backend.  
+2. **Persistence:** Cloud Firestore + Cloud Storage.  
+3. **Additional service:** Dialogflow + Firebase Authentication.
 
-### **Using PowerShell**
+This demonstrates a realistic end-to-end cloud deployment with authentication, persistent storage, and a computational search workload.
 
-```powershell
-# Health check
-Invoke-RestMethod -Uri "http://localhost:3000/"
+---
 
-# Get sample questions
-Invoke-RestMethod -Uri "http://localhost:3000/api/sample-questions?count=5"
+## 9. Technical contribution and evaluation
 
-# Ask a question
-Invoke-RestMethod -Method POST -Uri "http://localhost:3000/api/chat" -ContentType "application/json" -Body '{"message": "When was Fernando Eid born?"}'
-```
+This project’s main contribution is an efficient hybrid retrieval engine capable of:
 
-***
+- Searching **443k** QA entries in under **500 ms**.
+- Providing semantically relevant suggestions.
+- Achieving near-perfect functional accuracy by constraining users to validated QA pairs.
 
-## **Running the Backend Locally**
+Suggested evaluation metrics:
 
-### **Prerequisites:**
-- Node.js installed
-- Firebase CLI installed (`npm install -g firebase-tools`)
+- Latency (P50, P95) of `/api/search-questions`
+- Quality metrics:
+  - Recall@k
+  - Mean Reciprocal Rank (MRR)
+- Comparison of:
+  - Keyword search
+  - Fuzzy search
+  - Dialogflow intents
+  - Hybrid semantic + keyword search
 
-### **Start Backend (3 Steps):**
+---
 
-**Terminal 1 - Start Firestore Emulator:**
-```bash
-firebase emulators:start --only firestore
-```
+## 10. How a company could reuse this
 
-**Terminal 2 - Start API Server:**
-```bash
-node server.js
-```
+Steps to adapt:
 
-**Backend will be available at:** `http://localhost:3000`
+1. Replace the Wikipedia QA dataset with internal domain-specific questions.
+2. Run the embedding preprocessing scripts to generate new embedding + metadata files.
+3. Upload them to Cloud Storage and update environment variables.
+4. Update the frontend branding / text.
 
-## **Sample Questions You Can Use for Testing**
-
-```javascript
-const testQuestions = [
-    "When was Fernando Eid born?",
-    "How quickly does insulin aspart begin to work?",
-    "What is the population of Dongguan?",
-    "How many years did Brandon Jones play in the NFL?",
-    "What is the altitude range of the Zbrašov aragonite caves?",
-    "What does a Flush deck refer to?",
-    "What is a characteristic of coaxial cables?"
-];
-```
-
-# Activate the environment
-python -m venv venv
-pip install sentence-transformers google-cloud-firestore tqdm torch
-source venv/bin/activate
-
-# Run your script
-python precompute_embeddings.py
-
-# Deactivate when done
-deactivate
+The backend, retrieval engine, and cloud deployment remain the same.

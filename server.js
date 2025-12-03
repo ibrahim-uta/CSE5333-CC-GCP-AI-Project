@@ -18,8 +18,8 @@ app.use(express.static(path.join(__dirname, 'frontend')));
 
 let serverReady = false;
 
-// ---------------- Initialization ----------------
-
+// ---------------- Initialization ---------------- ---------- Initialization
+// ----------
 async function initialize() {
     console.log('============================================================');
     console.log('Environment:', config.environment);
@@ -28,34 +28,60 @@ async function initialize() {
         : 'DISABLED');
     console.log('Project ID:', config.projectId);
     console.log('============================================================');
+    const t0 = Date.now();
 
     try {
         if (config.useDialogflow) {
+            const tDf = Date.now();
+            console.log('[INIT] Initializing Dialogflow client...');
             dialogflow.initializeDialogflow();
+            console.log('[INIT] Dialogflow init took', Date.now() - tDf, 'ms');
+        } else {
+            console.log('[INIT] Dialogflow disabled by config.');
         }
 
-        // Load FAISS + qa_data.json into memory
-        await semanticUtil.initialize();
+        const tSem = Date.now();
+        console.log('[INIT] Calling semanticUtil.initialize()...');
+        await semanticUtil.initialize(); // <- only this call
+        console.log('[INIT] semanticUtil.initialize() took', Date.now() - tSem, 'ms');
+        console.log('[INIT] semanticUtil.isReady() =', semanticUtil.isReady());
 
-        // Firestore only for history/intents (no QA bulk load)
-        console.log('Initializing Firestore (no bulk cache)...');
+        console.log('[INIT] Initializing Firestore (no bulk cache)...');
+        const tFs = Date.now();
         firestoreUtil
             .loadQACache()
+            .then(() => console.log('[INIT] Firestore Q&A cache load finished in', Date.now() - tFs, 'ms'))
             .catch(err => {
-                console.error('Firestore init (non-critical) failed:', err.message);
+                console.error('[INIT] Firestore init (non-critical) failed:', err.message);
+                console.error(err.stack);
             });
 
-        // Build search index from FAISS QA data
         const qaFromFaiss = (semanticUtil.getQAJson && semanticUtil.getQAJson()) || semanticUtil.qaJson || [];
-        console.log(`Initializing searchEngine with ${qaFromFaiss.length} QA pairs from FAISS data`);
+        console.log('[INIT] QA pairs from semanticUtil:', Array.isArray(qaFromFaiss)
+            ? qaFromFaiss.length
+            : 'NOT ARRAY');
+
+        const tIdx = Date.now();
+        console.log('[INIT] Initializing searchEngine...');
         searchEngine.initialize(qaFromFaiss);
+        const engineStats = searchEngine.getStats
+            ? searchEngine.getStats()
+            : {};
+        console.log('[INIT] searchEngine.getStats() after init:', engineStats);
+        console.log('[INIT] searchEngine.init took', Date.now() - tIdx, 'ms');
 
         serverReady = true;
+        console.log('[INIT] ✅ Total init time =', Date.now() - t0, 'ms');
         console.log(`Server is ready and listening on port ${config.port}`);
         console.log(`Local: http://localhost:${config.port}`);
     } catch (error) {
-        console.error('Fatal initialization error:', error);
-        process.exit(1);
+        console.error('[INIT] ❌ Fatal initialization error:');
+        console.error(' name =', error.name);
+        console.error(' message=', error.message);
+        console.error(' stack =', error.stack);
+        if (config.environment !== 'cloud') {
+            process.exit(1);
+        }
     }
 }
 

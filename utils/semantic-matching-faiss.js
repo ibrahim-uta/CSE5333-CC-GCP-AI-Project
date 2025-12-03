@@ -55,53 +55,70 @@ async function loadFromLocal() {
     return {embeddingsBuffer, qaJson};
 }
 
+// ---------- Loaders ----------
 async function loadFromGCS() {
     const bucketName = process.env.EMBEDDINGS_BUCKET;
     const embeddingsFile = process.env.EMBEDDINGS_FILE;
     const qaDataFile = process.env.QA_DATA_FILE;
 
+    console.log('[SEMANTIC] ENV EMBEDDINGS_BUCKET =', bucketName);
+    console.log('[SEMANTIC] ENV EMBEDDINGS_FILE  =', embeddingsFile);
+    console.log('[SEMANTIC] ENV QA_DATA_FILE     =', qaDataFile);
+
     if (!bucketName || !embeddingsFile || !qaDataFile) {
-        console.log('⚠️ GCS env vars missing, cannot load embeddings from Cloud Storage');
+        console.log('[SEMANTIC] ⚠️ GCS env vars missing, cannot load embeddings from Cloud Storage');
         return null;
     }
 
-    console.log(`📊 Loading embeddings from GCS bucket "${bucketName}"...`);
-    const storage = new Storage(); // Uses ADC on Cloud Run
-    const bucket = storage.bucket(bucketName);
+    const t0 = Date.now();
+    try {
+        console.log(`[SEMANTIC] 📊 Loading from GCS bucket "${bucketName}"...`);
 
-    const [embeddingsBuffer] = await bucket
-        .file(embeddingsFile)
-        .download();
-    const [qaJsonBuffer] = await bucket
-        .file(qaDataFile)
-        .download();
-    const qaJson = JSON.parse(qaJsonBuffer.toString('utf8'));
+        const storage = new Storage(); // ADC on Cloud Run
+        const bucket = storage.bucket(bucketName);
 
-    return {embeddingsBuffer, qaJson};
+        console.log('[SEMANTIC]   → downloading', embeddingsFile);
+        const [embeddingsBuffer] = await bucket
+            .file(embeddingsFile)
+            .download();
+        console.log('[SEMANTIC]   ✓ embeddings downloaded in', Date.now() - t0, 'ms');
+
+        const t1 = Date.now();
+        console.log('[SEMANTIC]   → downloading', qaDataFile);
+        const [qaJsonBuffer] = await bucket
+            .file(qaDataFile)
+            .download();
+        console.log('[SEMANTIC]   ✓ qa_data downloaded in', Date.now() - t1, 'ms');
+
+        console.log('[SEMANTIC]   sizes: embeddings =', embeddingsBuffer.length, 'bytes, qaJson =', qaJsonBuffer.length, 'bytes');
+
+        const t2 = Date.now();
+        const qaJson = JSON.parse(qaJsonBuffer.toString('utf8'));
+        console.log('[SEMANTIC]   ✓ qa_data JSON parsed in', Date.now() - t2, 'ms');
+
+        console.log('[SEMANTIC] ✓ GCS load total time =', Date.now() - t0, 'ms');
+        return {embeddingsBuffer, qaJson};
+    } catch (err) {
+        console.error('[SEMANTIC] ❌ Error loading from GCS:');
+        console.error('  name   =', err.name);
+        console.error('  code   =', err.code);
+        console.error('  message=', err.message);
+        console.error('  stack  =', err.stack);
+        return null;
+    }
 }
 
-// ---------- Initialization ----------
-
+// ---------- Initialization ---------- ---------- Initialization ----------
 async function initialize() {
     try {
         console.log('📊 Loading pre-computed Q&A data...');
-        const environment = process.env.ENVIRONMENT || 'local';
+        console.log('[SEMANTIC] FORCING LOCAL LOAD (no GCS)');
 
-        let loaded = null;
-
-        if (environment === 'cloud') {
-            // Cloud Run / GCP: try GCS first
-            loaded = await loadFromGCS();
-            if (!loaded) {
-                console.log('⚠️ Falling back to local files for embeddings');
-                loaded = await loadFromLocal();
-            }
-        } else {
-            // Local dev
-            loaded = await loadFromLocal();
-        }
+        // Always use local files (inside the Docker image)
+        const loaded = await loadFromLocal();
 
         if (!loaded) {
+            console.error('[SEMANTIC] ❌ No data loaded from local files. Semantic search disabled.');
             isInitialized = false;
             return;
         }
@@ -113,17 +130,16 @@ async function initialize() {
         const bytesPerVector = dimension * bytesPerFloat;
         const numVectors = Math.floor(embeddingsBuffer.length / bytesPerVector);
 
-        console.log(`📐 Buffer size: ${embeddingsBuffer.length} bytes`);
-        console.log(`📐 Dimension: ${dimension}, Bytes per vector: ${bytesPerVector}`);
-        console.log(`📐 Calculated vectors: ${numVectors}`);
+        console.log(`[SEMANTIC] 📐 Buffer size: ${embeddingsBuffer.length} bytes`);
+        console.log(`[SEMANTIC] 📐 Dimension: ${dimension}, Bytes per vector: ${bytesPerVector}`);
+        console.log(`[SEMANTIC] 📐 Calculated vectors: ${numVectors}`);
 
         const vectors = [];
 
-        // Read vectors safely
         for (let i = 0; i < numVectors; i++) {
             const offset = i * bytesPerVector;
             if (offset + bytesPerVector > embeddingsBuffer.length) {
-                console.log(`⚠️ Stopping at vector ${i}, would exceed buffer`);
+                console.log(`[SEMANTIC] ⚠️ Stopping at vector ${i}, would exceed buffer`);
                 break;
             }
 
@@ -133,26 +149,27 @@ async function initialize() {
                 if (floatOffset + bytesPerFloat <= embeddingsBuffer.length) {
                     vector.push(embeddingsBuffer.readFloatLE(floatOffset));
                 } else {
-                    console.log(`⚠️ Incomplete vector at index ${i}, stopping`);
+                    console.log(`[SEMANTIC] ⚠️ Incomplete vector at index ${i}, stopping inner loop`);
                     break;
                 }
             }
-
             if (vector.length === dimension) {
                 vectors.push(vector);
             }
         }
 
         if (vectors.length === 0 || !Array.isArray(qaJson) || qaJson.length === 0) {
-            console.log('❌ No valid embeddings or QA data loaded');
+            console.error('[SEMANTIC] ❌ No valid embeddings or QA data loaded after parsing.');
+            console.error('[SEMANTIC] vectors.length =', vectors.length, 'qaJson length =', Array.isArray(qaJson)
+                ? qaJson.length
+                : 'NOT ARRAY');
             isInitialized = false;
             return;
         }
 
-        // Align vectors with qaJson and store globally as our "DB"
         const maxLen = Math.min(vectors.length, qaJson.length);
-        qaVectors = [];
-        qaText = [];
+        qaVectors = new Array(maxLen);
+        qaText = new Array(maxLen);
         for (let i = 0; i < maxLen; i++) {
             qaVectors[i] = vectors[i];
             qaText[i] = qaJson[i];
@@ -160,12 +177,14 @@ async function initialize() {
 
         isInitialized = true;
         const memoryMB = (embeddingsBuffer.length / (1024 * 1024)).toFixed(2);
-        console.log(`✅ Loaded ${maxLen} Q&A embeddings into memory`);
-        console.log(`   Memory usage: ~${memoryMB} MB`);
-        console.log('🚀 Fast semantic matching ready!');
+        console.log(`[SEMANTIC] ✅ Loaded ${maxLen} Q&A embeddings into memory`);
+        console.log(`[SEMANTIC] Memory usage: ~${memoryMB} MB`);
+        console.log('[SEMANTIC] 🚀 Fast semantic matching ready!');
     } catch (error) {
-        console.error('❌ Failed to initialize semantic matching:', error.message);
-        console.error('   Stack:', error.stack);
+        console.error('[SEMANTIC] ❌ Failed to initialize semantic matching:');
+        console.error('  name   =', error.name);
+        console.error('  message=', error.message);
+        console.error('  stack  =', error.stack);
         isInitialized = false;
     }
 }
