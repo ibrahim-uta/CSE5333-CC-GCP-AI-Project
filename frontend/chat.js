@@ -56,36 +56,34 @@ const API_URL = window.location.origin;
 // Load sample questions from API
 async function loadSampleQuestions() {
     try {
+        const container = document.getElementById('sampleQuestions');
+        container.classList.add('refreshing');  // 🆕 Start fade
+
         const response = await fetch(`${API_URL}/api/sample-questions?count=6`);
         const data = await response.json();
 
-        const container = document.getElementById('sampleQuestions');
-        container.innerHTML = ''; // Clear loading message
+        container.innerHTML = '';
 
-        data
-            .questions
-            .forEach(qa => {
-                const button = document.createElement('button');
-                button.className = 'sample-question-btn';
-                button.textContent = qa.question;
-                button.onclick = () => {
-                    document
-                        .getElementById('userInput')
-                        .value = qa.question;
-                    document
-                        .getElementById('userInput')
-                        .focus();
-                };
-                container.appendChild(button);
-            });
+        data.questions.forEach(questionText => {
+            const button = document.createElement('button');
+            button.className = 'sample-question-btn';
+            button.textContent = questionText;
+            button.onclick = () => {
+                document.getElementById('userInput').value = questionText;
+                document.getElementById('userInput').focus();
+            };
+            container.appendChild(button);
+        });
+
+        container.classList.remove('refreshing');  // 🆕 End fade
 
     } catch (error) {
         console.error('Failed to load sample questions:', error);
-        document
-            .getElementById('sampleQuestions')
-            .innerHTML = '<p class="error-text">Could not load suggestions</p>';
+        document.getElementById('sampleQuestions').innerHTML = 
+            '<p class="error-text">Could not load suggestions</p>';
     }
 }
+
 
 // Logout Handler
 document
@@ -152,6 +150,9 @@ document
                 .messages
                 .push({user: message, bot: data.reply, method: data.method, timestamp: new Date()});
 
+            // 🆕 Refresh suggested questions after each message
+            await loadSampleQuestions();
+
         } catch (error) {
             console.error('Chat error:', error);
             addMessage('Sorry, I encountered an error. Please try again.', 'bot');
@@ -166,8 +167,19 @@ document
 function addMessage(text, sender) {
     const messagesContainer = document.getElementById('chatMessages');
     const welcome = messagesContainer.querySelector('.welcome-message');
-    if (welcome) 
-        welcome.remove();
+
+    if (welcome && !welcome.classList.contains('compact')) {
+        welcome
+            .classList
+            .add('compact');
+
+        const heading = welcome.querySelector('h2');
+        const description = welcome.querySelector('p');
+        if (heading) 
+            heading.remove();
+        if (description) 
+            description.remove();
+        }
     
     const messageDiv = document.createElement('div');
     messageDiv.className = `message ${sender}`;
