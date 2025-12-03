@@ -374,3 +374,14 @@ const testQuestions = [
     "What is a characteristic of coaxial cables?"
 ];
 ```
+
+# Activate the environment
+python -m venv venv
+pip install sentence-transformers google-cloud-firestore tqdm torch
+source venv/bin/activate
+
+# Run your script
+python precompute_embeddings.py
+
+# Deactivate when done
+deactivate

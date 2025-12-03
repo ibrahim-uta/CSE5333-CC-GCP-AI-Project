@@ -18,3 +18,10 @@ ui-debug.log
 serviceAccountKey.json
 *.json.bak
 *.sh
+venv/
+qa_embeddings.json
+__pycache__/
+*.pyc
+venv/
+__pycache__/
+*.pyc
